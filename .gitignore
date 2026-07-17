@@ -1,0 +1,101 @@
+# Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# Java
+*.class
+*.log
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+hs_err_pid*
+replay_pid*
+
+# IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+.settings/
+.classpath
+.project
+.factorypath
+.metals/
+.bloop/
+metals.sbt
+
+# Logs
+logs/
+*.log
+log/
+
+# OS
+.DS_Store
+Thumbs.db
+*~
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Demo and test data
+demo/**/*.class
+**/test-output/
+
+# Snapshots (optional - comment out if you want to track)
+**/*.snapshot
+**/snapshots/
+
+# Build artifacts
+build/
+out/
+dist/
+
+#AI
+./.claude
+
+# code-graph
+.codegraph
+.codegraph/
+nul
+
+# gitnexus
+gitnexus
+gitnexus/
+gitnexus-web
+gitnexus-web/
+
+# Node / Frontend
+node_modules/
+dist/
+build/
+coverage/
+*.local
+.env.local
+.env.*.local
+
+# Vite
+.vite/
+
+# Data
+data/
+*.db
+
+# Distribution
+distribution/
