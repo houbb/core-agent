@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members = [
+    "core-agent-session",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/core-agent/core-agent"
+
+[package]
+name = "core-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Enterprise Agent Runtime — Agent Operating System"
+
+[dependencies]
+core-agent-session = { path = "core-agent-session" }

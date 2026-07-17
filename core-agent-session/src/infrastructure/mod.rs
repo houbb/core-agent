@@ -1,0 +1,57 @@
+//! Infrastructure 层 — 扩展点定义
+//!
+//! Session Runtime 的六个扩展点，定义稳定的 trait 接口。
+//! 企业版只需要新增实现，不需要修改核心代码。
+
+use async_trait::async_trait;
+
+use crate::domain::{
+    attachment::{Attachment, AttachmentId},
+    conversation::{Conversation, ConversationId},
+    manifest::Manifest,
+    message::{Message, MessageId},
+    session::{Session, SessionId},
+};
+use crate::error::SessionResult;
+
+/// SessionStore — 持久化存储接口
+///
+/// 实现：SQLite、PostgreSQL、云端存储
+#[async_trait]
+pub trait SessionStore: Send + Sync {
+    // ── Session ──
+    async fn create_session(&self, session: &Session) -> SessionResult<()>;
+    async fn get_session(&self, id: &SessionId) -> SessionResult<Option<Session>>;
+    async fn list_sessions(&self, offset: u64, limit: u64) -> SessionResult<(Vec<Session>, u64)>;
+    async fn update_session(&self, session: &Session) -> SessionResult<()>;
+    async fn delete_session(&self, id: &SessionId) -> SessionResult<()>;
+
+    // ── Conversation ──
+    async fn create_conversation(&self, conversation: &Conversation) -> SessionResult<()>;
+    async fn get_conversation(&self, id: &ConversationId) -> SessionResult<Option<Conversation>>;
+    async fn list_conversations(
+        &self,
+        session_id: &SessionId,
+    ) -> SessionResult<Vec<Conversation>>;
+
+    // ── Message ──
+    async fn append_message(&self, message: &Message) -> SessionResult<()>;
+    async fn get_message(&self, id: &MessageId) -> SessionResult<Option<Message>>;
+    async fn update_message(&self, message: &Message) -> SessionResult<()>;
+    async fn list_messages(
+        &self,
+        conversation_id: &ConversationId,
+        offset: u64,
+        limit: u64,
+    ) -> SessionResult<(Vec<Message>, u64)>;
+    async fn delete_message(&self, id: &MessageId) -> SessionResult<()>;
+
+    // ── Manifest ──
+    async fn upsert_manifest(&self, manifest: &Manifest) -> SessionResult<()>;
+    async fn get_manifest(&self, session_id: &SessionId) -> SessionResult<Option<Manifest>>;
+    async fn list_manifests(&self, offset: u64, limit: u64) -> SessionResult<(Vec<Manifest>, u64)>;
+
+    // ── Attachment ──
+    async fn create_attachment(&self, attachment: &Attachment) -> SessionResult<()>;
+    async fn get_attachment(&self, id: &AttachmentId) -> SessionResult<Option<Attachment>>;
+}

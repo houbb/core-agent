@@ -99,3 +99,7 @@ data/
 
 # Distribution
 distribution/
+
+# Added by cargo
+
+/target
