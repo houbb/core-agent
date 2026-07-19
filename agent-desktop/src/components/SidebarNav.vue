@@ -13,26 +13,34 @@ import {
   Wrench,
   Store,
 } from "lucide-vue-next";
+import { computed } from "vue";
 import type { Component } from "vue";
 import type { WorkspaceKind } from "../controller";
 
-defineProps<{ active: WorkspaceKind }>();
+const props = withDefaults(defineProps<{ active: WorkspaceKind; locale?: "zh-CN" | "en" }>(), {
+  locale: "en",
+});
 defineEmits<{ select: [workspace: WorkspaceKind] }>();
 
-const items: Array<{ id: WorkspaceKind; label: string; icon: Component }> = [
-  { id: "console", label: "Console", icon: Bot },
-  { id: "project", label: "Project", icon: FolderTree },
-  { id: "changes", label: "Changes", icon: GitCompareArrows },
-  { id: "trace", label: "Trace", icon: SquareActivity },
-  { id: "tools", label: "Tools", icon: Wrench },
-  { id: "memory", label: "Memory", icon: Brain },
-  { id: "sessions", label: "Sessions", icon: FileClock },
-  { id: "studio", label: "Studio", icon: PanelsTopLeft },
-  { id: "collaboration", label: "Team", icon: UsersRound },
-  { id: "enterprise", label: "Enterprise", icon: Building2 },
-  { id: "ecosystem", label: "Ecosystem", icon: Store },
-  { id: "settings", label: "Settings", icon: Settings },
+const definitions: Array<{ id: WorkspaceKind; labels: [string, string]; icon: Component }> = [
+  { id: "console", labels: ["对话", "Console"], icon: Bot },
+  { id: "project", labels: ["项目", "Project"], icon: FolderTree },
+  { id: "changes", labels: ["变更", "Changes"], icon: GitCompareArrows },
+  { id: "trace", labels: ["追踪", "Trace"], icon: SquareActivity },
+  { id: "tools", labels: ["工具", "Tools"], icon: Wrench },
+  { id: "memory", labels: ["记忆", "Memory"], icon: Brain },
+  { id: "sessions", labels: ["会话", "Sessions"], icon: FileClock },
+  { id: "studio", labels: ["工作室", "Studio"], icon: PanelsTopLeft },
+  { id: "collaboration", labels: ["协作", "Team"], icon: UsersRound },
+  { id: "enterprise", labels: ["企业", "Enterprise"], icon: Building2 },
+  { id: "ecosystem", labels: ["生态", "Ecosystem"], icon: Store },
+  { id: "settings", labels: ["设置", "Settings"], icon: Settings },
 ];
+
+const items = computed(() => definitions.map((item) => ({
+  ...item,
+  label: item.labels[props.locale === "zh-CN" ? 0 : 1],
+})));
 </script>
 
 <template>

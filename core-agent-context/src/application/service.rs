@@ -128,10 +128,27 @@ impl<S: SessionStore + 'static> ContextApplicationService<S> {
         };
 
         let max_messages = req.max_messages.unwrap_or(DEFAULT_MAX_MESSAGES);
+        let configurable_compression = req.compression_strategy.is_some();
+        let strategy = req
+            .compression_strategy
+            .as_deref()
+            .unwrap_or("recent-window");
+        if !matches!(strategy, "recent-window" | "extractive-summary") {
+            return Err(ContextError::InvalidArgument(format!(
+                "Unknown compression strategy: {strategy}"
+            )));
+        }
+        let trigger_percent = req.compression_trigger_percent.unwrap_or(80);
+        if !(1..=100).contains(&trigger_percent) {
+            return Err(ContextError::InvalidArgument(
+                "Compression trigger percent must be between 1 and 100".into(),
+            ));
+        }
         let reducer_config = ReducerConfig {
             max_total_tokens: req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
             keep_recent_messages: max_messages,
-            enable_summary: false,
+            enable_summary: strategy == "extractive-summary",
+            trigger_percent,
             ..ReducerConfig::default()
         };
 
@@ -150,7 +167,14 @@ impl<S: SessionStore + 'static> ContextApplicationService<S> {
             session_store: self.session_store.clone() as Arc<dyn SessionStore>,
             system_prompt: req.system_prompt.clone(),
             working_directory: req.working_directory.clone(),
-            max_messages: Some(max_messages),
+            // Configurable compression needs the bounded pre-reduction history in
+            // order to decide whether the threshold has been reached. Legacy
+            // callers keep the historical hard max_messages behavior.
+            max_messages: Some(if configurable_compression {
+                max_messages.max(500).min(10_000)
+            } else {
+                max_messages
+            }),
             extensions,
         };
 
@@ -251,6 +275,8 @@ mod tests {
             user_input: Some("Hello agent".into()),
             max_messages: Some(10),
             max_tokens: Some(128000),
+            compression_strategy: None,
+            compression_trigger_percent: None,
             working_directory: None,
         };
 
@@ -273,6 +299,8 @@ mod tests {
             user_input: None,
             max_messages: None,
             max_tokens: None,
+            compression_strategy: None,
+            compression_trigger_percent: None,
             working_directory: None,
         };
 

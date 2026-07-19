@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### P034: Enterprise Agent Core, Tools and Extension Loop
+
+- 新增用户/项目 `AGENTS.md`/override 指令链与 system/user/project Skills progressive disclosure；完整 `SKILL.md` 仅通过受控 `load_skill` 延迟加载并校验哈希。
+- Memory 切换为独立 SQLite project/session 持久化，相关条目自动进入 Context；新增受审 `remember_memory`、有界 `recall_memory` 和版本化 `forget_memory`，拒绝疑似凭据正文。
+- 新增 `find_files`、正则 `search_files` 和带 current SHA-256/歧义拒绝/Checkpoint 的 `apply_patch`；命令执行升级为结构化 stdout/stderr/exit、流式观察、超时/取消、输出上限、敏感环境剥离与进程树终止。
+- 新增后台 `start/poll/cancel_command`、最多四轮且只开放读取 Tool 的隔离 `delegate_task`；Linux bubblewrap 提供 best-effort OS sandbox，策略可要求 backend 缺失时 fail-closed。
+- 新增可配置 OpenAI Responses `web_search` 与 SSRF-safe `web_fetch`，返回可引用来源 URL；新增显式启用的 Hooks 与 MCP stdio initialize/tools/list/tools/call，统一经过 Command/Tool Permission。
+- 新增不可被项目覆盖的 managed policy，可集中限制 Tool/category、MCP server、Web domain、Memory/Hooks/Web 与 sandbox；Enterprise 主链新增 guidance、memory 和 hook 无正文观测。
+- 新增 41 个核心单元断言和跨 Runtime E2E，验证 Skill 延迟加载、工作区搜索、受审 Memory 写入、Runtime 重开自动召回及既有 Enterprise 工具/审批回归。
+
+## [0.3.0] - 2026-07-19
+
+### P033: Desktop Conversation, Model Configuration and Observability
+
+- 用户配置升级到兼容读取 v1 的 v2 多模型 schema：全局 `activeModel`、大小写不敏感的唯一 `name`、`baseURL`、API Key/ref 与默认 128K Token 上下文；Desktop 通过脱敏 DTO、fingerprint/CAS 和原子替换写入 Terminal 共用的用户文件。
+- `EnterpriseAgent` 增加 content-free 请求观测：稳定 request ID、入口/模型/状态、Context Token、输入/输出 Usage、wall/active/审批等待与 Context/Model/Tool 阶段耗时；全局 SQLite 使用 WAL，观测失败不遮蔽已完成的模型响应。
+- Context 增加可配置的 `recent-window` / `extractive-summary`、触发阈值、保留消息数和内容无关占用快照；Desktop 输入区增加 Context 圆环/数字 tooltip，设置页增加消耗日历、趋势图和最近请求列表。
+- Desktop 重构为项目/会话、主对话、文件上下文加窄导航的响应式布局，恢复历史会话，保留高级 Workspace，并新增临时权限切换、亮/暗主题与中英文偏好；Terminal/Desktop 均实时显示请求耗时。
+
 ### P032: Unified Desktop Workspace Experience
 
 - Desktop 新增系统目录选择器与进程内工作区切换：按新目录重新解析有效配置、隔离 Runtime 数据、清空旧 UI session，并默认拒绝旧 Runtime pending approval；不启动额外 Runtime 子进程。

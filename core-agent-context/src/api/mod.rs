@@ -9,7 +9,10 @@ use uuid::Uuid;
 use crate::application::ContextApplicationService;
 use crate::application::ContextPipeline;
 use crate::domain::Context;
-use crate::dto::{BuildContextRequest, ContextResponse, ContextSnapshotResponse, ListResponse};
+use crate::dto::{
+    BuildContextRequest, ContextAccessSnapshot, ContextResponse, ContextSnapshotResponse,
+    ListResponse,
+};
 use crate::error::ContextResult;
 use crate::infrastructure::ContextSnapshotStore;
 use core_agent_session::SessionStore;
@@ -32,6 +35,8 @@ use core_agent_session::SessionStore;
 ///     user_input: Some("Hello".into()),
 ///     max_messages: Some(20),
 ///     max_tokens: Some(128000),
+///     compression_strategy: None,
+///     compression_trigger_percent: None,
 ///     working_directory: None,
 /// }).await?;
 /// ```
@@ -105,6 +110,16 @@ impl<S: SessionStore + 'static> ContextRuntime<S> {
         self.app.load_snapshot(&uid).await
     }
 
+    /// Loads a persisted Context as content-free occupancy metadata.
+    pub async fn context_access_snapshot(
+        &self,
+        id: &str,
+        max_tokens: u64,
+    ) -> ContextResult<ContextAccessSnapshot> {
+        let context = self.load_context_snapshot(id).await?;
+        Ok(ContextAccessSnapshot::from_context(&context, max_tokens))
+    }
+
     /// 列出某 Session 的所有快照
     pub async fn list_snapshots(
         &self,
@@ -172,6 +187,8 @@ mod tests {
                 user_input: Some("Hello!".into()),
                 max_messages: Some(20),
                 max_tokens: None,
+                compression_strategy: None,
+                compression_trigger_percent: None,
                 working_directory: None,
             })
             .await

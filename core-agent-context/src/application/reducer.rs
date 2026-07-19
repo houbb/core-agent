@@ -42,6 +42,14 @@ impl ContextReducer for SummaryReducer {
         segments: Vec<ContextSegment>,
         config: &ReducerConfig,
     ) -> ContextResult<Vec<ContextSegment>> {
+        let source_tokens = segments.iter().fold(0_u64, |total, segment| {
+            total.saturating_add(segment.token_count)
+        });
+        let trigger_tokens = config
+            .max_total_tokens
+            .saturating_mul(u64::from(config.trigger_percent))
+            / 100;
+        let compression_triggered = config.max_total_tokens > 0 && source_tokens >= trigger_tokens;
         let mut grouped: HashMap<ContextSlot, Vec<ContextSegment>> = HashMap::new();
         for segment in segments {
             grouped.entry(segment.slot).or_default().push(segment);
@@ -91,8 +99,12 @@ impl ContextReducer for SummaryReducer {
 
             if slot == ContextSlot::Conversation {
                 optional.sort_by_key(conversation_position);
-                let (recent, mut older) =
-                    split_conversation(&optional, config.keep_recent_messages);
+                let keep_recent = if compression_triggered {
+                    config.keep_recent_messages
+                } else {
+                    usize::MAX
+                };
+                let (recent, mut older) = split_conversation(&optional, keep_recent);
                 let mut accepted = Vec::new();
 
                 // 从最新消息开始选择，最后再恢复时间正序。
@@ -105,7 +117,7 @@ impl ContextReducer for SummaryReducer {
                 }
                 accepted.reverse();
 
-                if config.enable_summary && !older.is_empty() {
+                if compression_triggered && config.enable_summary && !older.is_empty() {
                     let summary = summarize_older_messages(&older)?;
                     if accept_if_fits(&summary, config, &mut total_tokens, &mut slot_tokens) {
                         result.push(summary);
@@ -203,6 +215,7 @@ fn conversation_position(segment: &ContextSegment) -> i64 {
 /// 将旧消息压缩为一条摘要
 fn summarize_older_messages(older: &[ContextSegment]) -> ContextResult<ContextSegment> {
     let mut summary_parts = Vec::new();
+    let mut summary_characters = 0_usize;
 
     for seg in older {
         let content_text = seg
@@ -219,13 +232,21 @@ fn summarize_older_messages(older: &[ContextSegment]) -> ContextResult<ContextSe
             .unwrap_or("UNKNOWN");
 
         if !content_text.is_empty() {
-            summary_parts.push(format!("[{}]: {}", role, content_text));
+            let excerpt = content_text.chars().take(160).collect::<String>();
+            let part = format!("[{role}]: {excerpt}");
+            let characters = part.chars().count();
+            if summary_characters.saturating_add(characters) > 4_000 {
+                break;
+            }
+            summary_characters = summary_characters.saturating_add(characters);
+            summary_parts.push(part);
         }
     }
 
     let summary_text = format!(
-        "[Summary of earlier conversation ({} messages)]\n{}",
+        "[Summary of earlier conversation ({} messages)]\n[{} bounded excerpts]\n{}",
         older.len(),
+        summary_parts.len(),
         summary_parts.join("\n")
     );
 
@@ -341,8 +362,10 @@ mod tests {
             .collect();
 
         let config = ReducerConfig {
+            max_total_tokens: 1_000,
             keep_recent_messages: 5,
             enable_summary: true,
+            trigger_percent: 1,
             ..ReducerConfig::default()
         };
 
@@ -355,6 +378,27 @@ mod tests {
             .filter(|s| s.slot == ContextSlot::Conversation)
             .count();
         assert_eq!(conv_count, 6); // 5 recent + 1 summary
+    }
+
+    #[tokio::test]
+    async fn compression_waits_until_the_configured_threshold() {
+        let segments: Vec<ContextSegment> = (0..3)
+            .map(|i| make_conv_segment(i, &format!("message {i}")))
+            .collect();
+        let config = ReducerConfig {
+            max_total_tokens: 1_000,
+            keep_recent_messages: 1,
+            enable_summary: true,
+            trigger_percent: 80,
+            ..ReducerConfig::default()
+        };
+
+        let result = SummaryReducer.reduce(segments, &config).await.unwrap();
+
+        assert_eq!(result.len(), 3);
+        assert!(result
+            .iter()
+            .all(|segment| segment.metadata.get("reduced").is_none()));
     }
 
     #[tokio::test]

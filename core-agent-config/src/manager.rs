@@ -85,6 +85,7 @@ impl ConfigManager {
             config.apply(layer.patch);
             sources.push(layer.source);
         }
+        config.normalize_legacy();
         if let Some(reference) = config.model.api_key_ref.clone() {
             let resolver = self
                 .secret_resolvers

@@ -52,6 +52,8 @@ pub struct ModelConfig {
     pub name: String,
     #[serde(default = "default_model_profile")]
     pub profile: String,
+    #[serde(default = "default_max_context_tokens")]
+    pub max_context_tokens: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key_env: Option<String>,
 }
@@ -93,6 +95,12 @@ pub struct ContextConfig {
     pub max_file_bytes: usize,
     pub max_total_bytes: usize,
     pub max_directory_depth: usize,
+    #[serde(default = "default_compression_strategy")]
+    pub compression_strategy: String,
+    #[serde(default = "default_compression_trigger_percent")]
+    pub compression_trigger_percent: u8,
+    #[serde(default = "default_keep_recent_messages")]
+    pub keep_recent_messages: usize,
 }
 
 impl Default for ContextConfig {
@@ -103,6 +111,9 @@ impl Default for ContextConfig {
             max_file_bytes: 256 * 1024,
             max_total_bytes: 1024 * 1024,
             max_directory_depth: 8,
+            compression_strategy: default_compression_strategy(),
+            compression_trigger_percent: default_compression_trigger_percent(),
+            keep_recent_messages: default_keep_recent_messages(),
         }
     }
 }
@@ -119,6 +130,7 @@ impl Default for CliConfig {
                 endpoint: default_model_endpoint(),
                 name: default_model_name(),
                 profile: default_model_profile(),
+                max_context_tokens: default_max_context_tokens(),
                 api_key_env: None,
             },
             workspace: WorkspaceConfig { root: ".".into() },
@@ -177,6 +189,7 @@ impl CliConfig {
                 endpoint: resolved.config.model.endpoint.clone(),
                 name: resolved.config.model.name.clone(),
                 profile: resolved.config.model.profile.clone(),
+                max_context_tokens: resolved.config.model.max_context_tokens,
                 api_key_env: resolved
                     .config
                     .model
@@ -200,6 +213,9 @@ impl CliConfig {
                 max_file_bytes: resolved.config.context.max_file_bytes,
                 max_total_bytes: resolved.config.context.max_total_bytes,
                 max_directory_depth: resolved.config.context.max_directory_depth,
+                compression_strategy: resolved.config.context.compression.strategy.clone(),
+                compression_trigger_percent: resolved.config.context.compression.trigger_percent,
+                keep_recent_messages: resolved.config.context.compression.keep_recent_messages,
             },
             sources: resolved.sources,
             api_key: resolved.config.model.api_key,
@@ -220,6 +236,7 @@ impl CliConfig {
                 "endpoint": self.model.endpoint,
                 "name": self.model.name,
                 "profile": self.model.profile,
+                "maxContextTokens": self.model.max_context_tokens,
                 "apiKeyConfigured": self.api_key.is_some(),
                 "apiKeyEnv": self.model.api_key_env,
             },
@@ -248,6 +265,7 @@ impl CliConfig {
             || self.model.endpoint.trim().is_empty()
             || self.model.name.trim().is_empty()
             || self.model.profile.trim().is_empty()
+            || self.model.max_context_tokens == 0
             || self.workspace.root.trim().is_empty()
             || !matches!(
                 self.permissions.mode.as_str(),
@@ -257,6 +275,12 @@ impl CliConfig {
             || self.context.max_files == 0
             || self.context.max_total_bytes < self.context.max_file_bytes
             || self.context.max_directory_depth == 0
+            || !matches!(
+                self.context.compression_strategy.as_str(),
+                "recent-window" | "extractive-summary"
+            )
+            || !(1..=100).contains(&self.context.compression_trigger_percent)
+            || self.context.keep_recent_messages == 0
         {
             return Err(CliError::Configuration(
                 "server, model, workspace or context configuration is invalid".into(),
@@ -319,6 +343,22 @@ fn default_model_name() -> String {
 
 fn default_model_profile() -> String {
     "default".into()
+}
+
+fn default_max_context_tokens() -> u64 {
+    128_000
+}
+
+fn default_compression_strategy() -> String {
+    "recent-window".into()
+}
+
+fn default_compression_trigger_percent() -> u8 {
+    80
+}
+
+fn default_keep_recent_messages() -> usize {
+    20
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

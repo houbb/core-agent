@@ -16,8 +16,42 @@
 //! + Phase 13 (Platform Runtime)
 
 mod checkpoint;
+mod command_runtime;
 mod enterprise;
+mod guidance;
+mod hook_runtime;
 mod interaction;
+mod managed_policy;
+mod mcp_runtime;
+mod memory_tools;
+mod skill_tools;
+mod subagent_runtime;
+mod web_runtime;
+mod workspace_tools;
+
+pub use command_runtime::{
+    BackgroundCommandManager, BackgroundCommandSnapshot, BackgroundCommandStatus, CommandEvent,
+    CommandObserver, CommandOutcome as GovernedCommandOutcome,
+    CommandRequest as GovernedCommandRequest, CommandRunError, CommandRunResult, CommandRunner,
+    CommandSandboxPolicy, CommandSandboxStatus, CommandStream, LocalCommandRunner,
+    NoopCommandObserver, SandboxNetworkPolicy, SandboxRequirement,
+};
+pub use hook_runtime::{
+    HookEvent, HookFailurePolicy, HookInvocation, HookResult, HookRule, HookRuntime,
+    HookRuntimeError, HookRuntimeResult,
+};
+pub use managed_policy::{
+    ManagedAgentPolicy, ManagedPolicyDecision, ManagedPolicyError, ManagedPolicyResult,
+};
+pub use mcp_runtime::{
+    discover_mcp_servers, McpClient, McpRuntimeError, McpRuntimeResult, McpServerConfig,
+    McpToolProvider,
+};
+pub use subagent_runtime::{SubAgentOutcome, SubAgentProfile, SubAgentRuntime};
+pub use web_runtime::{
+    OpenAiWebSearchProvider, WebDomainPolicy, WebFetchResult, WebRuntime, WebRuntimeError,
+    WebRuntimeResult, WebSearchProvider, WebSearchRequest, WebSearchResult, WebSource,
+};
 
 pub use enterprise::{
     EnterpriseAgent, EnterpriseAgentConfig, EnterpriseAgentError, EnterpriseAgentEvent,
@@ -25,6 +59,12 @@ pub use enterprise::{
     EnterpriseApprovalRequest, EnterpriseCommandAction, EnterpriseCommandOutcome,
     EnterpriseModelConfig, EnterpriseRun, EnterpriseRuntimes, EnterpriseSessionStatus,
     PermissionMode,
+};
+pub use guidance::{
+    default_guidance_home, default_skill_roots, GuidanceError, GuidanceResult, GuidanceScope,
+    InstructionChain, InstructionDocument, LoadedSkill, SkillCatalog, SkillDescriptor, SkillRoot,
+    DEFAULT_INSTRUCTION_BUDGET_BYTES, DEFAULT_MAX_SKILLS, DEFAULT_SKILL_FILE_LIMIT_BYTES,
+    DEFAULT_SKILL_METADATA_BUDGET_BYTES,
 };
 pub use interaction::{
     ContextCandidateIndex, ContextCandidateSearch, ContextMentionLimits, ContextMentionResolver,
@@ -35,9 +75,10 @@ pub use interaction::{
 
 pub use core_agent_config as config_runtime;
 pub use core_agent_config::{
-    project_storage_key, standard_config_manager, AgentConfig, ConfigManager, ConfigManagerBuilder,
-    ConfigProvider, ConfigRequest, ConfigSourceInfo, EnvironmentConfigProvider,
-    EnvironmentSecretResolver, ProjectFileConfigProvider, ResolvedConfig, SecretResolver,
+    project_storage_key, standard_config_manager, AgentConfig, ConfigCompression, ConfigManager,
+    ConfigManagerBuilder, ConfigModel, ConfigProvider, ConfigRequest, ConfigSourceInfo,
+    EnvironmentConfigProvider, EnvironmentSecretResolver, ProjectFileConfigProvider,
+    ResolvedConfig, SecretResolver, UserConfigSnapshot, UserConfigUpdate, UserConfigWriter,
     UserFileConfigProvider,
 };
 

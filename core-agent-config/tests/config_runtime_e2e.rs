@@ -53,7 +53,10 @@ async fn provider_strategies_merge_by_explicit_priority_and_resolve_secrets() {
         r#"{"model":{"name":"project-model"},"permissions":{"mode":"auto"}}"#,
     )
     .unwrap();
-    let environment = BTreeMap::from([("CORE_AGENT_MODEL".into(), "environment-model".into())]);
+    let environment = BTreeMap::from([
+        ("CORE_AGENT_MODEL".into(), "environment-model".into()),
+        ("CORE_AGENT_MODEL_MAX_CONTEXT_TOKENS".into(), "64000".into()),
+    ]);
     let secrets = BTreeMap::from([("TEST_CONFIG_KEY".into(), "private-value".into())]);
     let manager = ConfigManager::builder()
         .provider(Arc::new(UserFileConfigProvider::new(user.path())))
@@ -70,6 +73,7 @@ async fn provider_strategies_merge_by_explicit_priority_and_resolve_secrets() {
         .unwrap();
 
     assert_eq!(resolved.config.model.name, "environment-model");
+    assert_eq!(resolved.config.model.max_context_tokens, 64_000);
     assert_eq!(resolved.config.permissions.mode, "auto");
     assert_eq!(
         resolved.config.model.api_key.as_deref(),
@@ -127,4 +131,36 @@ fn project_storage_keys_are_stable_and_do_not_expose_paths() {
     assert_ne!(one, project_storage_key(second.path()).unwrap());
     assert_eq!(one.len(), 64);
     assert!(!one.contains(&first.path().to_string_lossy().to_string()));
+}
+
+#[tokio::test]
+async fn version_two_selects_one_of_multiple_unique_models_with_token_limits() {
+    let user = tempfile::tempdir().unwrap();
+    std::fs::write(
+        user.path().join("core-agent-config.yaml"),
+        "version: 2\nactiveModel: second\nmodels:\n  - name: first\n    baseURL: https://first.example/v1\n    maxContextTokens: 64000\n  - name: second\n    baseURL: https://second.example/v1\n    maxContextTokens: 128000\ncontext:\n  compression:\n    strategy: extractive-summary\n    triggerPercent: 75\n    keepRecentMessages: 12\n",
+    )
+    .unwrap();
+    let manager = ConfigManager::builder()
+        .provider(Arc::new(UserFileConfigProvider::new(user.path())))
+        .build()
+        .unwrap();
+
+    let resolved = manager.resolve(&ConfigRequest::global()).await.unwrap();
+    assert_eq!(resolved.config.models.len(), 2);
+    assert_eq!(resolved.config.active_model, "second");
+    assert_eq!(resolved.config.model.name, "second");
+    assert_eq!(resolved.config.model.max_context_tokens, 128_000);
+    assert_eq!(
+        resolved.config.context.compression.strategy,
+        "extractive-summary"
+    );
+
+    std::fs::write(
+        user.path().join("core-agent-config.yaml"),
+        "version: 2\nactiveModel: same\nmodels:\n  - name: same\n    baseURL: https://one.example/v1\n  - name: SAME\n    baseURL: https://two.example/v1\n",
+    )
+    .unwrap();
+    let error = manager.resolve(&ConfigRequest::global()).await.unwrap_err();
+    assert!(error.to_string().contains("unique"));
 }

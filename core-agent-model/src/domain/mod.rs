@@ -4,6 +4,7 @@ mod capability;
 mod metadata;
 mod profile;
 mod request;
+mod request_metric;
 mod response;
 mod usage;
 
@@ -16,6 +17,7 @@ pub use request::{
     ContentPart, EmbeddingRequest, ImageDetail, ModelConfig, ModelMessage, ModelRequest, ModelRole,
     ModelToolCall, ModelToolDefinition,
 };
+pub use request_metric::{AgentRequestMetric, RequestStatus, UsageBucket};
 pub use response::{
     EmbeddingResponse, FinishReason, ModelResponse, ModelStreamEvent, ToolCallDelta,
     ToolCallRequest,

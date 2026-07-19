@@ -12,6 +12,7 @@ pub enum PreferenceKind {
     Layout,
     RecentProject,
     Theme,
+    Language,
     Shortcut,
 }
 
@@ -22,6 +23,7 @@ impl PreferenceKind {
             Self::Layout => "LAYOUT",
             Self::RecentProject => "RECENT_PROJECT",
             Self::Theme => "THEME",
+            Self::Language => "LANGUAGE",
             Self::Shortcut => "SHORTCUT",
         }
     }
@@ -94,6 +96,8 @@ pub struct ProjectNode {
     pub name: String,
     pub path: String,
     pub kind: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<ProjectNode>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -156,6 +160,7 @@ pub struct SessionItem {
 #[serde(rename_all = "camelCase")]
 pub struct DesktopWorkspaceSnapshot {
     pub project_name: String,
+    pub workspace_path: String,
     pub profile: String,
     pub model: String,
     pub project_tree: Vec<ProjectNode>,
@@ -169,6 +174,86 @@ pub struct DesktopWorkspaceSnapshot {
     pub permission_mode: String,
     pub config_sources: Vec<core_agent::ConfigSourceInfo>,
     pub effective_config: Value,
+    pub context_usage: Option<ContextUsage>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextUsage {
+    pub context_id: String,
+    pub total_tokens: u64,
+    pub max_tokens: u64,
+    pub build_duration_ms: u64,
+    pub estimated: bool,
+    pub distribution: Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationMessage {
+    pub id: String,
+    pub role: String,
+    pub content: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelSetting {
+    pub provider: String,
+    #[serde(rename = "baseURL")]
+    pub base_url: String,
+    pub name: String,
+    pub profile: String,
+    pub max_context_tokens: u64,
+    pub api_key_configured: bool,
+    pub api_key_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsSnapshot {
+    pub path: String,
+    pub fingerprint: Option<String>,
+    pub active_model: String,
+    pub models: Vec<ModelSetting>,
+    pub compression: core_agent::ConfigCompression,
+    pub sources: Vec<core_agent::ConfigSourceInfo>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelSettingInput {
+    pub provider: String,
+    #[serde(rename = "baseURL")]
+    pub base_url: String,
+    pub name: String,
+    pub profile: Option<String>,
+    pub max_context_tokens: u64,
+    pub api_key: Option<String>,
+    pub api_key_ref: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveSettingsRequest {
+    pub fingerprint: Option<String>,
+    pub active_model: String,
+    pub models: Vec<ModelSettingInput>,
+    pub compression: core_agent::ConfigCompression,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionModeRequest {
+    pub mode: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageSnapshot {
+    pub buckets: Vec<core_agent::UsageBucket>,
+    pub requests: Vec<core_agent::AgentRequestMetric>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -184,6 +269,10 @@ pub struct AgentSubmission {
     pub session_id: Option<Uuid>,
     pub response: Option<String>,
     pub action: core_agent::EnterpriseCommandAction,
+    pub request_id: Option<Uuid>,
+    pub wall_duration_ms: Option<u64>,
+    pub active_duration_ms: Option<u64>,
+    pub telemetry_recorded: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]

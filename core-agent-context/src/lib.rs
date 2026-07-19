@@ -33,6 +33,8 @@
 //!     user_input: Some("Hello".into()),
 //!     max_messages: Some(20),
 //!     max_tokens: Some(128000),
+//!     compression_strategy: None,
+//!     compression_trigger_percent: None,
 //!     working_directory: None,
 //! }).await?;
 //! ```
@@ -51,7 +53,10 @@ pub mod persistence;
 pub use api::ContextRuntime;
 
 // DTO
-pub use dto::{BuildContextRequest, ContextResponse, ContextSnapshotResponse, ListResponse};
+pub use dto::{
+    BuildContextRequest, ContextAccessSnapshot, ContextResponse, ContextSnapshotResponse,
+    ListResponse, TokenDistributionResponse,
+};
 
 // Domain
 pub use domain::{

@@ -76,4 +76,37 @@ CREATE INDEX IF NOT EXISTS idx_model_usage_request ON model_usage(request_id);
 CREATE INDEX IF NOT EXISTS idx_model_usage_created ON model_usage(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_model_usage_profile ON model_usage(profile_key, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_model_usage_success ON model_usage(success, created_at DESC);
+
+-- Content-free request-level timing. request/model/session references are logical and have no FK.
+CREATE TABLE IF NOT EXISTS agent_request_metric (
+    id                      TEXT PRIMARY KEY NOT NULL,
+    workspace_key           TEXT NOT NULL,
+    session_id              TEXT,
+    entrypoint              TEXT NOT NULL,
+    model_name              TEXT NOT NULL,
+    started_at              TEXT NOT NULL,
+    completed_at            TEXT,
+    wall_duration_ms        INTEGER NOT NULL DEFAULT 0,
+    active_duration_ms      INTEGER NOT NULL DEFAULT 0,
+    approval_wait_ms        INTEGER NOT NULL DEFAULT 0,
+    context_duration_ms     INTEGER NOT NULL DEFAULT 0,
+    model_duration_ms       INTEGER NOT NULL DEFAULT 0,
+    tool_duration_ms        INTEGER NOT NULL DEFAULT 0,
+    context_tokens          INTEGER NOT NULL DEFAULT 0,
+    status                  TEXT NOT NULL,
+    error_kind              TEXT,
+    create_time             TEXT NOT NULL DEFAULT '',
+    update_time             TEXT NOT NULL DEFAULT '',
+    create_user             TEXT NOT NULL DEFAULT 'system',
+    update_user             TEXT NOT NULL DEFAULT 'system'
+);
+
+CREATE INDEX IF NOT EXISTS idx_request_metric_started
+    ON agent_request_metric(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_request_metric_model
+    ON agent_request_metric(model_name, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_request_metric_workspace
+    ON agent_request_metric(workspace_key, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_request_metric_status
+    ON agent_request_metric(status, started_at DESC);
 "#;

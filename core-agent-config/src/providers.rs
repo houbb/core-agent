@@ -162,11 +162,23 @@ impl ConfigProvider for EnvironmentConfigProvider {
     }
 
     async fn load(&self, _request: &ConfigRequest) -> ConfigResult<Option<ConfigLayer>> {
+        let max_context_tokens = self
+            .values
+            .get("CORE_AGENT_MODEL_MAX_CONTEXT_TOKENS")
+            .map(|value| {
+                value.parse::<u64>().map_err(|_| {
+                    ConfigError::Validation(
+                        "CORE_AGENT_MODEL_MAX_CONTEXT_TOKENS must be an integer".into(),
+                    )
+                })
+            })
+            .transpose()?;
         let model = ConfigModelPatch {
             provider: self.values.get("CORE_AGENT_MODEL_PROVIDER").cloned(),
             endpoint: self.values.get("CORE_AGENT_MODEL_ENDPOINT").cloned(),
             name: self.values.get("CORE_AGENT_MODEL").cloned(),
             profile: self.values.get("CORE_AGENT_MODEL_PROFILE").cloned(),
+            max_context_tokens,
             api_key: self.values.get("CORE_AGENT_API_KEY").cloned(),
             api_key_ref: None,
             api_key_env: None,
@@ -180,6 +192,7 @@ impl ConfigProvider for EnvironmentConfigProvider {
             || model.endpoint.is_some()
             || model.name.is_some()
             || model.profile.is_some()
+            || model.max_context_tokens.is_some()
             || model.api_key.is_some();
         if !has_model && permissions.is_none() {
             return Ok(None);

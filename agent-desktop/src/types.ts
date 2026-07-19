@@ -67,6 +67,7 @@ export interface ContextCandidateSearch {
 
 export interface WorkspaceSnapshot {
   projectName: string;
+  workspacePath: string;
   profile: string;
   model: string;
   projectTree: ProjectNode[];
@@ -80,12 +81,26 @@ export interface WorkspaceSnapshot {
   permissionMode: string;
   configSources: Array<{ provider: string; priority: number; location?: string }>;
   effectiveConfig: unknown;
+  contextUsage?: ContextUsage;
+}
+
+export interface ContextUsage {
+  contextId: string;
+  totalTokens: number;
+  maxTokens: number;
+  buildDurationMs: number;
+  estimated: boolean;
+  distribution: Record<string, number>;
 }
 
 export interface AgentSubmission {
   sessionId?: string;
   response?: string;
   action: "none" | "new-session" | "clear-view" | "exit";
+  requestId?: string;
+  wallDurationMs?: number;
+  activeDurationMs?: number;
+  telemetryRecorded?: boolean;
 }
 
 export interface ApprovalRequest {
@@ -103,4 +118,65 @@ export interface UiPreference {
   kind: string;
   value: unknown;
   version: number;
+  updatedAt?: string;
+}
+
+export interface ModelSetting {
+  provider: string;
+  baseURL: string;
+  name: string;
+  profile: string;
+  maxContextTokens: number;
+  apiKeyConfigured: boolean;
+  apiKeyRef?: string;
+  apiKey?: string;
+}
+
+export interface CompressionSetting {
+  strategy: "recent-window" | "extractive-summary";
+  triggerPercent: number;
+  keepRecentMessages: number;
+}
+
+export interface SettingsSnapshot {
+  path: string;
+  fingerprint?: string;
+  activeModel: string;
+  models: ModelSetting[];
+  compression: CompressionSetting;
+  sources: Array<{ provider: string; priority: number; location?: string }>;
+}
+
+export interface UsageBucket {
+  day: string;
+  modelName: string;
+  promptTokens: number;
+  completionTokens: number;
+  cacheTokens: number;
+  totalTokens: number;
+  modelCalls: number;
+}
+
+export interface RequestMetric {
+  id: string;
+  workspaceKey: string;
+  sessionId?: string;
+  entrypoint: string;
+  modelName: string;
+  startedAt: string;
+  completedAt?: string;
+  wallDurationMs: number;
+  activeDurationMs: number;
+  approvalWaitMs: number;
+  contextDurationMs: number;
+  modelDurationMs: number;
+  toolDurationMs: number;
+  contextTokens: number;
+  status: string;
+  errorKind?: string;
+}
+
+export interface UsageSnapshot {
+  buckets: UsageBucket[];
+  requests: RequestMetric[];
 }

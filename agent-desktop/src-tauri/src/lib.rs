@@ -7,17 +7,21 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use core_agent::{
-    project_storage_key, standard_config_manager, ConfigManager, ConfigRequest, ConfigSourceInfo,
-    ContextCandidateIndex, ContextCandidateSearch, EnterpriseAgent, EnterpriseAgentConfig,
-    EnterpriseAgentEvent, EnterpriseApprovalDecision, EnterpriseApprovalHandler,
-    EnterpriseApprovalRequest, EnterpriseCommandAction, InteractionCommandRegistry, ResolvedConfig,
+    project_storage_key, standard_config_manager, ConfigManager, ConfigModel, ConfigRequest,
+    ConfigSourceInfo, ContextCandidateIndex, ContextCandidateSearch, EnterpriseAgent,
+    EnterpriseAgentConfig, EnterpriseAgentEvent, EnterpriseApprovalDecision,
+    EnterpriseApprovalHandler, EnterpriseApprovalRequest, EnterpriseCommandAction,
+    InteractionCommandRegistry, PermissionMode, ResolvedConfig, UserConfigUpdate, UserConfigWriter,
+    UserFileConfigProvider,
 };
 use tauri::{Emitter, Manager};
 
 pub use domain::{
     AgentMessageRequest, AgentSubmission, ApprovalDecisionRequest, ChangeItem, CommandSuggestion,
-    DesktopWorkspaceSnapshot, MemoryItem, PreferenceKind, ProjectNode, RuntimeRequest,
-    SavePreferenceRequest, SessionItem, ToolStatus, TraceStep, UiPreference,
+    ContextUsage, ConversationMessage, DesktopWorkspaceSnapshot, MemoryItem, ModelSetting,
+    PermissionModeRequest, PreferenceKind, ProjectNode, RuntimeRequest, SavePreferenceRequest,
+    SaveSettingsRequest, SessionItem, SettingsSnapshot, ToolStatus, TraceStep, UiPreference,
+    UsageSnapshot,
 };
 pub use error::{DesktopError, DesktopResult};
 pub use store::DesktopPreferenceStore;
@@ -33,6 +37,8 @@ struct DesktopState {
 #[derive(Clone)]
 struct DesktopRuntime {
     agent: Arc<EnterpriseAgent>,
+    workspace: std::path::PathBuf,
+    config: core_agent::AgentConfig,
     resume_session: bool,
     permission_mode: String,
     config_sources: Vec<ConfigSourceInfo>,
@@ -163,21 +169,7 @@ async fn agent_load_workspace(
         .workspace_snapshot()
         .await
         .map_err(agent_error)?;
-    let project_tree = workspace
-        .resources
-        .iter()
-        .take(2_000)
-        .map(|resource| ProjectNode {
-            id: resource.id.to_string(),
-            name: resource.name.clone(),
-            path: resource.uri.clone(),
-            kind: if resource.resource_type == core_agent::ResourceType::Directory {
-                "directory".into()
-            } else {
-                "file".into()
-            },
-        })
-        .collect();
+    let project_tree = build_project_tree(&runtime.workspace, &workspace.resources);
     let sessions = runtime
         .agent
         .list_sessions()
@@ -212,6 +204,10 @@ async fn agent_load_workspace(
         Some(session_id) => trace_steps(session_id, runtime.agent.events(session_id).await),
         None => Vec::new(),
     };
+    let context_usage = match session_id {
+        Some(session_id) => latest_context_usage(runtime.agent.as_ref(), session_id).await,
+        None => None,
+    };
     let commands = InteractionCommandRegistry::with_builtins()
         .help()
         .into_iter()
@@ -223,6 +219,7 @@ async fn agent_load_workspace(
         .collect();
     Ok(DesktopWorkspaceSnapshot {
         project_name: workspace.name,
+        workspace_path: runtime.workspace.to_string_lossy().into_owned(),
         profile: "Coder".into(),
         model: runtime.agent.model_name().into(),
         project_tree,
@@ -236,6 +233,127 @@ async fn agent_load_workspace(
         permission_mode: runtime.permission_mode,
         config_sources: runtime.config_sources,
         effective_config: runtime.effective_config,
+        context_usage,
+    })
+}
+
+fn build_project_tree(
+    root: &std::path::Path,
+    resources: &[core_agent::Resource],
+) -> Vec<ProjectNode> {
+    let mut nodes = Vec::new();
+    for resource in resources.iter().take(2_000) {
+        let Some(path) = url::Url::parse(&resource.uri)
+            .ok()
+            .and_then(|value| value.to_file_path().ok())
+        else {
+            continue;
+        };
+        let Ok(relative) = path.strip_prefix(root) else {
+            continue;
+        };
+        let components = relative
+            .components()
+            .filter_map(|component| component.as_os_str().to_str().map(str::to_owned))
+            .collect::<Vec<_>>();
+        if components.is_empty() {
+            continue;
+        }
+        insert_project_node(
+            &mut nodes,
+            &components,
+            "",
+            resource.id.to_string(),
+            resource.resource_type == core_agent::ResourceType::Directory,
+        );
+    }
+    sort_project_nodes(&mut nodes);
+    nodes
+}
+
+fn insert_project_node(
+    nodes: &mut Vec<ProjectNode>,
+    components: &[String],
+    prefix: &str,
+    resource_id: String,
+    final_is_directory: bool,
+) {
+    let name = &components[0];
+    let current_path = if prefix.is_empty() {
+        name.clone()
+    } else {
+        format!("{prefix}/{name}")
+    };
+    let is_directory = components.len() > 1 || final_is_directory;
+    let index = nodes
+        .iter()
+        .position(|node| node.name == *name)
+        .unwrap_or_else(|| {
+            nodes.push(ProjectNode {
+                id: if components.len() == 1 {
+                    resource_id.clone()
+                } else {
+                    format!("dir:{current_path}")
+                },
+                name: name.clone(),
+                path: current_path.clone(),
+                kind: if is_directory { "directory" } else { "file" }.into(),
+                children: Vec::new(),
+            });
+            nodes.len() - 1
+        });
+    if components.len() == 1 {
+        nodes[index].id = resource_id;
+        nodes[index].kind = if final_is_directory {
+            "directory"
+        } else {
+            "file"
+        }
+        .into();
+    } else {
+        insert_project_node(
+            &mut nodes[index].children,
+            &components[1..],
+            &current_path,
+            resource_id,
+            final_is_directory,
+        );
+    }
+}
+
+fn sort_project_nodes(nodes: &mut [ProjectNode]) {
+    nodes.sort_by(|left, right| {
+        left.kind
+            .cmp(&right.kind)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+    for node in nodes {
+        sort_project_nodes(&mut node.children);
+    }
+}
+
+async fn latest_context_usage(
+    agent: &EnterpriseAgent,
+    session_id: uuid::Uuid,
+) -> Option<ContextUsage> {
+    let snapshots = agent
+        .contexts()
+        .list_snapshots(&session_id.to_string(), 0, 1)
+        .await
+        .ok()?;
+    let snapshot = snapshots.items.first()?;
+    let context = agent
+        .contexts()
+        .load_context_snapshot(&snapshot.id)
+        .await
+        .ok()?;
+    Some(ContextUsage {
+        context_id: context.id.to_string(),
+        total_tokens: context.total_tokens,
+        max_tokens: agent.max_context_tokens(),
+        build_duration_ms: context.build_duration_ms,
+        estimated: true,
+        distribution: serde_json::to_value(context.token_distribution).ok()?,
     })
 }
 
@@ -256,6 +374,10 @@ async fn agent_send_message(
                 session_id: outcome.session_id,
                 response: Some(outcome.response),
                 action: outcome.action,
+                request_id: None,
+                wall_duration_ms: None,
+                active_duration_ms: None,
+                telemetry_recorded: None,
             });
         }
     }
@@ -271,6 +393,168 @@ async fn agent_send_message(
         session_id: Some(run.session_id),
         response: None,
         action: EnterpriseCommandAction::None,
+        request_id: Some(run.request_id),
+        wall_duration_ms: Some(run.wall_duration_ms),
+        active_duration_ms: Some(run.active_duration_ms),
+        telemetry_recorded: Some(run.telemetry_recorded),
+    })
+}
+
+#[tauri::command]
+async fn agent_load_session(
+    state: tauri::State<'_, DesktopState>,
+    session_id: uuid::Uuid,
+) -> DesktopResult<Vec<ConversationMessage>> {
+    let agent = state.agent().await;
+    let conversation = agent
+        .sessions()
+        .list_conversations(&session_id.to_string())
+        .await
+        .map_err(agent_error)?
+        .into_iter()
+        .find(|value| value.conversation_type == "MAIN")
+        .ok_or_else(|| DesktopError::NotFound("MAIN conversation".into()))?;
+    let total = agent
+        .sessions()
+        .list_messages(&conversation.id, 0, 1)
+        .await
+        .map_err(agent_error)?
+        .total;
+    let messages = agent
+        .sessions()
+        .list_messages(&conversation.id, total.saturating_sub(500), 500)
+        .await
+        .map_err(agent_error)?;
+    Ok(messages
+        .items
+        .into_iter()
+        .filter(|message| matches!(message.status.as_str(), "DONE" | "COMPLETED"))
+        .filter_map(|message| {
+            let role = match message.role.as_str() {
+                "USER" => "user",
+                "ASSISTANT" | "AGENT" => "agent",
+                "SYSTEM" => "system",
+                _ => return None,
+            };
+            Some(ConversationMessage {
+                id: message.id,
+                role: role.into(),
+                content: message.content,
+                created_at: message.created_at,
+            })
+        })
+        .collect())
+}
+
+#[tauri::command]
+async fn agent_load_settings(
+    state: tauri::State<'_, DesktopState>,
+) -> DesktopResult<SettingsSnapshot> {
+    let runtime = state.runtime.read().await.clone();
+    settings_snapshot(&runtime)
+}
+
+#[tauri::command]
+async fn agent_save_settings(
+    state: tauri::State<'_, DesktopState>,
+    request: SaveSettingsRequest,
+) -> DesktopResult<SettingsSnapshot> {
+    let current = state.runtime.read().await.clone();
+    let mut models = Vec::with_capacity(request.models.len());
+    for mut input in request.models {
+        input.api_key = input.api_key.filter(|value| !value.is_empty());
+        input.api_key_ref = input.api_key_ref.filter(|value| !value.is_empty());
+        let has_existing_secret = current.config.models.iter().any(|model| {
+            model.name == input.name && (model.api_key.is_some() || model.api_key_ref.is_some())
+        });
+        if input.api_key.is_none() && input.api_key_ref.is_none() && !has_existing_secret {
+            return Err(DesktopError::Validation(format!(
+                "model {} requires an API key",
+                input.name
+            )));
+        }
+        models.push(ConfigModel {
+            provider: input.provider,
+            endpoint: input.base_url,
+            profile: input
+                .profile
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| input.name.clone()),
+            name: input.name,
+            max_context_tokens: input.max_context_tokens,
+            api_key: input.api_key,
+            api_key_ref: input.api_key_ref,
+        });
+    }
+    let update = UserConfigUpdate {
+        active_model: request.active_model,
+        models,
+        compression: request.compression,
+    };
+    state.approvals.pause();
+    let result = async {
+        let _operation = state.runtime_operation.lock().await;
+        UserConfigWriter::discover()
+            .map_err(agent_error)?
+            .save(&update, request.fingerprint.as_deref())
+            .map_err(agent_error)?;
+        let runtime = open_desktop_runtime(&state.app_data, &current.workspace).await?;
+        let snapshot = settings_snapshot(&runtime)?;
+        *state.runtime.write().await = runtime;
+        Ok(snapshot)
+    }
+    .await;
+    state.approvals.resume();
+    result
+}
+
+#[tauri::command]
+async fn agent_usage(state: tauri::State<'_, DesktopState>) -> DesktopResult<UsageSnapshot> {
+    let agent = state.agent().await;
+    Ok(UsageSnapshot {
+        buckets: agent.usage_buckets(366).await.map_err(agent_error)?,
+        requests: agent.request_metrics(0, 200).await.map_err(agent_error)?,
+    })
+}
+
+#[tauri::command]
+async fn agent_set_permission_mode(
+    state: tauri::State<'_, DesktopState>,
+    request: PermissionModeRequest,
+) -> DesktopResult<String> {
+    let mode = PermissionMode::parse(&request.mode).map_err(agent_error)?;
+    let _operation = state.runtime_operation.lock().await;
+    let agent = state.agent().await;
+    agent.set_permission_mode(mode).await.map_err(agent_error)?;
+    state.runtime.write().await.permission_mode = request.mode.clone();
+    Ok(request.mode)
+}
+
+fn settings_snapshot(runtime: &DesktopRuntime) -> DesktopResult<SettingsSnapshot> {
+    let file = UserConfigWriter::discover()
+        .map_err(agent_error)?
+        .snapshot()
+        .map_err(agent_error)?;
+    Ok(SettingsSnapshot {
+        path: file.path.to_string_lossy().into_owned(),
+        fingerprint: file.fingerprint,
+        active_model: runtime.config.active_model.clone(),
+        models: runtime
+            .config
+            .models
+            .iter()
+            .map(|model| ModelSetting {
+                provider: model.provider.clone(),
+                base_url: model.endpoint.clone(),
+                name: model.name.clone(),
+                profile: model.profile.clone(),
+                max_context_tokens: model.max_context_tokens,
+                api_key_configured: model.api_key.is_some() || model.api_key_ref.is_some(),
+                api_key_ref: model.api_key_ref.clone(),
+            })
+            .collect(),
+        compression: runtime.config.context.compression.clone(),
+        sources: runtime.config_sources.clone(),
     })
 }
 
@@ -319,6 +603,31 @@ async fn agent_open_workspace(
     let _operation = state.runtime_operation.lock().await;
     *state.runtime.write().await = runtime;
     state.approvals.resume();
+    record_recent_project(state.preferences.as_ref(), &workspace)?;
+    Ok(())
+}
+
+fn record_recent_project(
+    preferences: &DesktopPreferenceStore,
+    workspace: &std::path::Path,
+) -> DesktopResult<()> {
+    let key = format!(
+        "recent:{}",
+        project_storage_key(workspace).map_err(agent_error)?
+    );
+    let current = preferences.find(&key)?;
+    preferences.save(
+        SavePreferenceRequest {
+            key,
+            kind: PreferenceKind::RecentProject,
+            value: serde_json::json!({
+                "path": workspace.to_string_lossy(),
+                "name": workspace.file_name().and_then(|value| value.to_str()).unwrap_or("Workspace")
+            }),
+            expected_version: current.map(|value| value.version),
+        },
+        "desktop-user",
+    )?;
     Ok(())
 }
 
@@ -335,7 +644,8 @@ fn trace_steps(session_id: uuid::Uuid, events: Vec<EnterpriseAgentEvent>) -> Vec
             };
             let duration_ms = event
                 .data
-                .pointer("/usage/latency_ms")
+                .get("wallDurationMs")
+                .or_else(|| event.data.pointer("/usage/latency_ms"))
                 .and_then(serde_json::Value::as_u64);
             let tokens = event
                 .data
@@ -370,12 +680,18 @@ async fn resolve_desktop_runtime_config(
         .await
         .map_err(agent_error)?;
     let project_key = project_storage_key(&workspace).map_err(agent_error)?;
-    let runtime = EnterpriseAgentConfig::from_agent_config(
+    let mut runtime = EnterpriseAgentConfig::from_agent_config(
         app_data.join("projects").join(project_key).join("runtime"),
         workspace,
         &resolved.config,
     )
     .map_err(agent_error)?;
+    runtime.entrypoint = "desktop".into();
+    runtime.telemetry_dir = Some(
+        UserFileConfigProvider::default_directory()
+            .map_err(agent_error)?
+            .join("runtime"),
+    );
     Ok((runtime, resolved))
 }
 
@@ -389,6 +705,8 @@ async fn open_desktop_runtime(
     let agent = EnterpriseAgent::open(config).await.map_err(agent_error)?;
     Ok(DesktopRuntime {
         agent: Arc::new(agent),
+        workspace: workspace.to_path_buf(),
+        config: resolved.config.clone(),
         resume_session: resolved.config.session.resume_last,
         permission_mode: resolved.config.permissions.mode.clone(),
         config_sources: resolved.sources.clone(),
@@ -412,6 +730,8 @@ pub fn run() {
             let runtime =
                 tauri::async_runtime::block_on(open_desktop_runtime(&directory, &workspace))
                     .map_err(|error| std::io::Error::other(error.to_string()))?;
+            record_recent_project(&preferences, &workspace)
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
             let approvals = Arc::new(DesktopApprovalBroker::new(app.handle().clone()));
             app.manage(DesktopState {
                 preferences: Arc::new(preferences),
@@ -428,9 +748,14 @@ pub fn run() {
             agent_context_candidates,
             agent_open_workspace,
             agent_load_workspace,
+            agent_load_session,
             agent_send_message,
             agent_decide_approval,
             agent_session_events,
+            agent_load_settings,
+            agent_save_settings,
+            agent_usage,
+            agent_set_permission_mode,
             runtime_bridge::runtime_request
         ])
         .run(tauri::generate_context!())

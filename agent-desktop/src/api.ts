@@ -9,6 +9,12 @@ import type {
   ApprovalRequest,
   AgentSubmission,
   ContextCandidateSearch,
+  ConversationItem,
+  SettingsSnapshot,
+  UsageSnapshot,
+  UiPreference,
+  ModelSetting,
+  CompressionSetting,
 } from "./types";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -20,6 +26,23 @@ export interface DesktopApi {
   openWorkspace(path: string): Promise<void>;
   searchContext(query: string, limit?: number): Promise<ContextCandidateSearch>;
   sendMessage(message: string, sessionId?: string): Promise<AgentSubmission>;
+  loadSession?(sessionId: string): Promise<ConversationItem[]>;
+  loadSettings?(): Promise<SettingsSnapshot>;
+  saveSettings?(request: {
+    fingerprint?: string;
+    activeModel: string;
+    models: ModelSetting[];
+    compression: CompressionSetting;
+  }): Promise<SettingsSnapshot>;
+  loadUsage?(): Promise<UsageSnapshot>;
+  setPermissionMode?(mode: string): Promise<string>;
+  listPreferences?(): Promise<UiPreference[]>;
+  savePreference?(request: {
+    key: string;
+    kind: string;
+    value: unknown;
+    expectedVersion?: number;
+  }): Promise<UiPreference>;
   subscribe(sessionId: string, onEvent: (event: TraceStep) => void): () => void;
 }
 
@@ -41,6 +64,44 @@ export class TauriDesktopApi implements DesktopApi {
     return invoke<AgentSubmission>("agent_send_message", {
       request: { message, sessionId },
     });
+  }
+
+  async loadSession(sessionId: string): Promise<ConversationItem[]> {
+    return invoke<ConversationItem[]>("agent_load_session", { sessionId });
+  }
+
+  async loadSettings(): Promise<SettingsSnapshot> {
+    return invoke<SettingsSnapshot>("agent_load_settings");
+  }
+
+  async saveSettings(request: {
+    fingerprint?: string;
+    activeModel: string;
+    models: ModelSetting[];
+    compression: CompressionSetting;
+  }): Promise<SettingsSnapshot> {
+    return invoke<SettingsSnapshot>("agent_save_settings", { request });
+  }
+
+  async loadUsage(): Promise<UsageSnapshot> {
+    return invoke<UsageSnapshot>("agent_usage");
+  }
+
+  async setPermissionMode(mode: string): Promise<string> {
+    return invoke<string>("agent_set_permission_mode", { request: { mode } });
+  }
+
+  async listPreferences(): Promise<UiPreference[]> {
+    return invoke<UiPreference[]>("list_preferences");
+  }
+
+  async savePreference(request: {
+    key: string;
+    kind: string;
+    value: unknown;
+    expectedVersion?: number;
+  }): Promise<UiPreference> {
+    return invoke<UiPreference>("save_preference", { request });
   }
 
   subscribe(sessionId: string, onEvent: (event: TraceStep) => void): () => void {
@@ -90,6 +151,7 @@ export class HttpDesktopApi implements DesktopApi {
     }
     return {
       projectName: project.name ?? "Workspace",
+      workspacePath: "",
       profile: status.profile ?? "Coder",
       model: status.model ?? "Unavailable",
       projectTree: project.nodes ?? [],
@@ -103,6 +165,7 @@ export class HttpDesktopApi implements DesktopApi {
       permissionMode: "risk-based",
       configSources: [],
       effectiveConfig: {},
+      contextUsage: undefined,
     };
   }
 

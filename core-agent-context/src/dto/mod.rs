@@ -21,6 +21,12 @@ pub struct BuildContextRequest {
     pub max_messages: Option<usize>,
     /// 最大 Token 预算（可选，默认 128000）
     pub max_tokens: Option<u64>,
+    /// 压缩策略（recent-window / extractive-summary）
+    #[serde(default)]
+    pub compression_strategy: Option<String>,
+    /// 压缩触发阈值百分比（默认 80）
+    #[serde(default)]
+    pub compression_trigger_percent: Option<u8>,
     /// 工作目录（可选）
     pub working_directory: Option<String>,
 }
@@ -54,7 +60,7 @@ pub struct ContextResponse {
 }
 
 /// Token 分布响应
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenDistributionResponse {
     pub system: u64,
     pub conversation: u64,
@@ -140,16 +146,7 @@ impl From<&crate::domain::context::Context> for ContextResponse {
             session_id: ctx.session_id.to_string(),
             conversation_id: ctx.conversation_id.map(|id| id.to_string()),
             total_tokens: ctx.total_tokens,
-            token_distribution: TokenDistributionResponse {
-                system: ctx.token_distribution.system,
-                conversation: ctx.token_distribution.conversation,
-                workspace: ctx.token_distribution.workspace,
-                memory: ctx.token_distribution.memory,
-                environment: ctx.token_distribution.environment,
-                plugin: ctx.token_distribution.plugin,
-                tool: ctx.token_distribution.tool,
-                user: ctx.token_distribution.user,
-            },
+            token_distribution: TokenDistributionResponse::from(&ctx.token_distribution),
             built_at: ctx.built_at.to_rfc3339(),
             hash: ctx.hash.clone(),
             build_duration_ms: ctx.build_duration_ms,
@@ -235,6 +232,8 @@ mod tests {
             user_input: Some("Hello".into()),
             max_messages: Some(10),
             max_tokens: Some(64000),
+            compression_strategy: None,
+            compression_trigger_percent: None,
             working_directory: Some("/home/user".into()),
         };
 
@@ -243,5 +242,46 @@ mod tests {
 
         assert_eq!(restored.session_id, "550e8400-e29b-41d4-a716-446655440000");
         assert_eq!(restored.max_messages, Some(10));
+    }
+}
+
+/// Read-only, content-free Context occupancy exposed to UI and reducer extensions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextAccessSnapshot {
+    pub context_id: String,
+    pub total_tokens: u64,
+    pub max_tokens: u64,
+    pub estimated: bool,
+    pub build_duration_ms: u64,
+    pub distribution: TokenDistributionResponse,
+}
+
+impl ContextAccessSnapshot {
+    /// Builds a content-free occupancy view suitable for UI and reducer extensions.
+    pub fn from_context(context: &crate::domain::Context, max_tokens: u64) -> Self {
+        Self {
+            context_id: context.id.to_string(),
+            total_tokens: context.total_tokens,
+            max_tokens,
+            estimated: true,
+            build_duration_ms: context.build_duration_ms,
+            distribution: TokenDistributionResponse::from(&context.token_distribution),
+        }
+    }
+}
+
+impl From<&crate::domain::TokenDistribution> for TokenDistributionResponse {
+    fn from(distribution: &crate::domain::TokenDistribution) -> Self {
+        Self {
+            system: distribution.system,
+            conversation: distribution.conversation,
+            workspace: distribution.workspace,
+            memory: distribution.memory,
+            environment: distribution.environment,
+            plugin: distribution.plugin,
+            tool: distribution.tool,
+            user: distribution.user,
+        }
     }
 }

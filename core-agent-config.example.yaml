@@ -1,11 +1,14 @@
 # Copy to ~/core-agent/core-agent-config.yaml and replace the placeholder.
-version: 1
-model:
-  provider: deepseek
-  endpoint: https://api.deepseek.com
-  name: deepseek-v4-flash
-  profile: default
-  apiKey: "<your-api-key>"
+# Terminal and Desktop read and write this same user-level file.
+version: 2
+activeModel: deepseek-v4-flash
+models:
+  - provider: deepseek
+    baseURL: https://api.deepseek.com
+    name: deepseek-v4-flash
+    profile: default
+    maxContextTokens: 128000
+    apiKey: "<your-api-key>"
 permissions:
   mode: risk-based
 memory:
@@ -18,3 +21,7 @@ context:
   maxFileBytes: 262144
   maxTotalBytes: 1048576
   maxDirectoryDepth: 8
+  compression:
+    strategy: recent-window
+    triggerPercent: 80
+    keepRecentMessages: 20

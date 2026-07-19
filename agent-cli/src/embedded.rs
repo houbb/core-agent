@@ -40,6 +40,7 @@ impl EmbeddedAgentClient {
         agent_config.model.endpoint = config.model.endpoint.clone();
         agent_config.model.name = config.model.name.clone();
         agent_config.model.profile = config.model.profile.clone();
+        agent_config.model.max_context_tokens = config.model.max_context_tokens;
         agent_config.model.api_key = config.api_key();
         agent_config.permissions.mode = config.permissions.mode.clone();
         agent_config.memory.enabled = config.memory.enabled;
@@ -49,12 +50,22 @@ impl EmbeddedAgentClient {
         agent_config.context.max_file_bytes = config.context.max_file_bytes;
         agent_config.context.max_total_bytes = config.context.max_total_bytes;
         agent_config.context.max_directory_depth = config.context.max_directory_depth;
-        let runtime_config = EnterpriseAgentConfig::from_agent_config(
+        agent_config.context.compression.strategy = config.context.compression_strategy.clone();
+        agent_config.context.compression.trigger_percent =
+            config.context.compression_trigger_percent;
+        agent_config.context.compression.keep_recent_messages = config.context.keep_recent_messages;
+        let mut runtime_config = EnterpriseAgentConfig::from_agent_config(
             agent_directory(root).join("runtime"),
             &workspace,
             &agent_config,
         )
         .map_err(|error| CliError::Configuration(error.to_string()))?;
+        runtime_config.entrypoint = "terminal".into();
+        runtime_config.telemetry_dir = Some(
+            core_agent::UserFileConfigProvider::default_directory()
+                .map_err(|error| CliError::Configuration(error.to_string()))?
+                .join("runtime"),
+        );
         let runtime = EnterpriseAgent::open(runtime_config)
             .await
             .map_err(api_error)?;

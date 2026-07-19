@@ -1,5 +1,16 @@
 <script setup lang="ts">
-import { ChevronRight, File, Folder } from "lucide-vue-next";
+import {
+  Braces,
+  ChevronRight,
+  FileCode2,
+  FileImage,
+  FileJson2,
+  FileText,
+  FileType2,
+  Folder,
+  Settings2,
+  SquareTerminal,
+} from "lucide-vue-next";
 import { ref } from "vue";
 import type { ProjectNode } from "../types";
 
@@ -17,6 +28,18 @@ function activate(node: ProjectNode) {
   }
   emit("select", node);
 }
+
+function fileIcon(name: string) {
+  const extension = name.split(".").pop()?.toLowerCase();
+  if (["rs", "ts", "tsx", "js", "jsx", "vue"].includes(extension ?? "")) return FileCode2;
+  if (["json", "jsonc"].includes(extension ?? "")) return FileJson2;
+  if (["yaml", "yml", "toml", "ini"].includes(extension ?? "")) return Settings2;
+  if (["md", "mdx", "txt"].includes(extension ?? "")) return FileText;
+  if (["png", "jpg", "jpeg", "gif", "svg", "webp"].includes(extension ?? "")) return FileImage;
+  if (["css", "scss", "less", "html"].includes(extension ?? "")) return Braces;
+  if (["sh", "bash", "ps1", "bat", "cmd"].includes(extension ?? "")) return SquareTerminal;
+  return FileType2;
+}
 </script>
 
 <template>
@@ -30,7 +53,7 @@ function activate(node: ProjectNode) {
         />
         <span v-else class="tree-spacer" />
         <Folder v-if="node.kind === 'directory'" :size="14" />
-        <File v-else :size="14" />
+        <component :is="fileIcon(node.name)" v-else :size="14" class="file-icon" />
         <span>{{ node.name }}</span>
       </button>
       <ProjectTree

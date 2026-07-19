@@ -11,4 +11,9 @@ describe("SidebarNav", () => {
     await buttons[3].trigger("click");
     expect(wrapper.emitted("select")?.[0]).toEqual(["trace"]);
   });
+
+  it("uses the selected Desktop language for navigation labels", () => {
+    const wrapper = mount(SidebarNav, { props: { active: "settings", locale: "zh-CN" } });
+    expect(wrapper.find('button[aria-current="page"]').attributes("aria-label")).toBe("设置");
+  });
 });

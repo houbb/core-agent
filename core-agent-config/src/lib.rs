@@ -5,11 +5,14 @@ mod error;
 mod infrastructure;
 mod manager;
 mod providers;
+mod writer;
 
 pub use domain::{
-    AgentConfig, AgentConfigPatch, ConfigContext, ConfigContextPatch, ConfigLayer, ConfigMemory,
-    ConfigMemoryPatch, ConfigModel, ConfigModelPatch, ConfigPermissions, ConfigPermissionsPatch,
-    ConfigRequest, ConfigSession, ConfigSessionPatch, ConfigSourceInfo, ResolvedConfig,
+    AgentConfig, AgentConfigPatch, ConfigCompression, ConfigCompressionPatch, ConfigContext,
+    ConfigContextPatch, ConfigLayer, ConfigMemory, ConfigMemoryPatch, ConfigModel,
+    ConfigModelPatch, ConfigPermissions, ConfigPermissionsPatch, ConfigRequest, ConfigSession,
+    ConfigSessionPatch, ConfigSourceInfo, ResolvedConfig, CONFIG_SCHEMA_VERSION,
+    DEFAULT_MAX_CONTEXT_TOKENS,
 };
 pub use error::{ConfigError, ConfigResult};
 pub use infrastructure::{ConfigProvider, SecretResolver};
@@ -18,6 +21,7 @@ pub use providers::{
     DefaultsConfigProvider, EnvironmentConfigProvider, EnvironmentSecretResolver,
     ProjectFileConfigProvider, UserFileConfigProvider,
 };
+pub use writer::{UserConfigSnapshot, UserConfigUpdate, UserConfigWriter};
 
 use sha2::{Digest, Sha256};
 use std::path::Path;

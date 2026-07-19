@@ -56,6 +56,8 @@ async fn complete_context_flow_uses_latest_messages_and_replays_snapshot() {
         user_input: Some("Continue".into()),
         max_messages: Some(2),
         max_tokens: Some(1_000),
+        compression_strategy: None,
+        compression_trigger_percent: None,
         working_directory: None,
     };
 
@@ -86,6 +88,19 @@ async fn complete_context_flow_uses_latest_messages_and_replays_snapshot() {
     assert_eq!(restored.hash, first.hash);
     assert_eq!(restored.build_duration_ms, first.build_duration_ms);
     assert_eq!(restored.conversation.messages.len(), 2);
+    let access = runtime
+        .context_access_snapshot(&first.id.to_string(), 1_000)
+        .await
+        .unwrap();
+    assert_eq!(access.total_tokens, first.total_tokens);
+    assert_eq!(access.max_tokens, 1_000);
+    assert_eq!(
+        access.distribution.conversation,
+        first.token_distribution.conversation
+    );
+    assert!(!serde_json::to_string(&access)
+        .unwrap()
+        .contains("message-4"));
     assert_eq!(
         runtime
             .list_snapshots(&session_id, 0, 10)
@@ -112,6 +127,8 @@ async fn context_runtime_rejects_cross_session_conversation_and_budget_overflow(
             user_input: None,
             max_messages: None,
             max_tokens: None,
+            compression_strategy: None,
+            compression_trigger_percent: None,
             working_directory: None,
         })
         .await
@@ -126,11 +143,63 @@ async fn context_runtime_rejects_cross_session_conversation_and_budget_overflow(
             user_input: Some("required".into()),
             max_messages: Some(0),
             max_tokens: Some(1),
+            compression_strategy: None,
+            compression_trigger_percent: None,
             working_directory: None,
         })
         .await
         .unwrap_err();
     assert!(matches!(over_budget, ContextError::TokenBudgetExceeded(_)));
+}
+
+#[tokio::test]
+async fn configurable_compression_observes_history_before_applying_recent_window() {
+    let session_store = Arc::new(SqliteSessionStore::new(":memory:").unwrap());
+    let session_runtime = SessionRuntime::new(session_store.clone(), Arc::new(EventBus::new(16)));
+    let (session_id, conversation_id) = create_session(&session_runtime, "Compression E2E").await;
+    for index in 0..5 {
+        session_runtime
+            .append_message(AppendMessageRequest {
+                conversation_id: conversation_id.clone(),
+                role: "USER".into(),
+                content: format!("short-{index}"),
+            })
+            .await
+            .unwrap();
+    }
+    let runtime = ContextRuntime::new(session_store, None);
+
+    let below_threshold = runtime
+        .build(BuildContextRequest {
+            session_id: session_id.clone(),
+            conversation_id: Some(conversation_id.clone()),
+            system_prompt: None,
+            user_input: None,
+            max_messages: Some(2),
+            max_tokens: Some(1_000),
+            compression_strategy: Some("recent-window".into()),
+            compression_trigger_percent: Some(100),
+            working_directory: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(below_threshold.conversation.messages.len(), 5);
+
+    let compressed = runtime
+        .build(BuildContextRequest {
+            session_id,
+            conversation_id: Some(conversation_id),
+            system_prompt: None,
+            user_input: None,
+            max_messages: Some(2),
+            max_tokens: Some(100),
+            compression_strategy: Some("recent-window".into()),
+            compression_trigger_percent: Some(1),
+            working_directory: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(compressed.conversation.messages.len(), 2);
 }
 
 #[tokio::test]
@@ -149,6 +218,8 @@ async fn archived_session_is_replayable_but_deleted_session_is_rejected() {
         user_input: None,
         max_messages: None,
         max_tokens: None,
+        compression_strategy: None,
+        compression_trigger_percent: None,
         working_directory: None,
     };
     assert!(context_runtime.build(request.clone()).await.is_ok());
@@ -182,6 +253,8 @@ async fn file_snapshot_database_recovers_after_reopen() {
                 user_input: None,
                 max_messages: None,
                 max_tokens: None,
+                compression_strategy: None,
+                compression_trigger_percent: None,
                 working_directory: None,
             })
             .await

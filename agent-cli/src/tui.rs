@@ -1,7 +1,7 @@
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use core_agent::{
@@ -126,6 +126,8 @@ struct TuiState {
     history_index: Option<usize>,
     approval: Option<TuiApprovalPrompt>,
     busy: bool,
+    request_started: Option<Instant>,
+    last_duration: Option<Duration>,
     tick: usize,
     scroll: u16,
 }
@@ -154,6 +156,8 @@ impl TuiState {
             history_index: None,
             approval: None,
             busy: false,
+            request_started: None,
+            last_duration: None,
             tick: 0,
             scroll: 0,
         })
@@ -358,6 +362,10 @@ pub async fn run_tui(
         }
         while let Ok(completed) = result_receiver.try_recv() {
             state.busy = false;
+            state.last_duration = state
+                .request_started
+                .take()
+                .map(|started| started.elapsed());
             active = None;
             if completed.source == "/clear" {
                 state.messages.clear();
@@ -365,6 +373,12 @@ pub async fn run_tui(
             match completed.result {
                 Ok(lines) => state.push(MessageRole::Agent, lines.join("\n")),
                 Err(error) => state.push(MessageRole::Error, error.to_string()),
+            }
+            if let Some(duration) = state.last_duration {
+                state.push(
+                    MessageRole::System,
+                    format!("Request finished in {}.", format_elapsed(duration)),
+                );
             }
         }
         state.tick = state.tick.wrapping_add(1);
@@ -480,6 +494,7 @@ pub async fn run_tui(
                             }
                             state.push(MessageRole::User, source.clone());
                             state.busy = true;
+                            state.request_started = Some(Instant::now());
                             let sender = result_sender.clone();
                             let app = application.clone();
                             let commands = professional.clone();
@@ -753,7 +768,11 @@ fn render_input(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
 fn render_status(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
     let spinner = ["◐", "◓", "◑", "◒"][(state.tick / 2) % 4];
     let status = if state.busy {
-        format!("{spinner} working · Ctrl+C exit")
+        let elapsed = state
+            .request_started
+            .map(|started| format_elapsed(started.elapsed()))
+            .unwrap_or_else(|| "0.0s".into());
+        format!("{spinner} working · {elapsed} · Ctrl+C exit")
     } else if let Some(suggestion) = state.suggestions.get(state.selected_suggestion) {
         format!("› {} · ↑/↓ select · Enter/Tab complete", suggestion.label)
     } else if let Some(hint) = state.completion_hint.as_ref() {
@@ -767,6 +786,16 @@ fn render_status(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
             .style(Style::default().fg(MUTED)),
         area,
     );
+}
+
+fn format_elapsed(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    let tenths = duration.subsec_millis() / 100;
+    if seconds < 60 {
+        format!("{seconds}.{tenths}s")
+    } else {
+        format!("{}m {:02}s", seconds / 60, seconds % 60)
+    }
 }
 
 fn render_approval(frame: &mut Frame<'_>, state: &TuiState) {
@@ -1102,5 +1131,11 @@ mod tests {
             copyable_text(&state).as_deref(),
             Some("answer with diagnostics")
         );
+    }
+
+    #[test]
+    fn elapsed_time_is_human_readable_for_live_and_completed_requests() {
+        assert_eq!(format_elapsed(Duration::from_millis(1_250)), "1.2s");
+        assert_eq!(format_elapsed(Duration::from_millis(61_400)), "1m 01s");
     }
 }

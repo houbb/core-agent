@@ -6,6 +6,7 @@ import type { AgentSubmission, TraceStep, WorkspaceSnapshot } from "./types";
 function snapshot(): WorkspaceSnapshot {
   return {
     projectName: "Core Agent",
+    workspacePath: "D:/workspace/core-agent",
     profile: "Architect",
     model: "Local",
     projectTree: [],
@@ -28,8 +29,15 @@ class FakeApi implements DesktopApi {
   sendMessage = vi.fn(async (): Promise<AgentSubmission> => ({
     sessionId: "session-1",
     action: "none",
+    requestId: "request-1",
+    wallDurationMs: 1250,
+    activeDurationMs: 1000,
+    telemetryRecorded: true,
   }));
   loadWorkspace = vi.fn(async () => snapshot());
+  loadSession = vi.fn(async () => [
+    { id: "history-1", role: "agent" as const, content: "Previous answer" },
+  ]);
   openWorkspace = vi.fn(async () => undefined);
   searchContext = vi.fn(async (query: string) => ({
     indexedFiles: 1,
@@ -54,6 +62,7 @@ describe("desktop controller", () => {
     await controller.load();
     expect(controller.state.connected).toBe(true);
     expect(controller.state.currentSessionId).toBe("session-1");
+    expect(controller.state.conversation[0]?.content).toBe("Previous answer");
 
     await controller.send("Review the current change");
     expect(api.sendMessage).toHaveBeenCalledOnce();
@@ -66,6 +75,9 @@ describe("desktop controller", () => {
     });
     expect(controller.state.snapshot.trace).toHaveLength(1);
     expect(controller.state.conversation.at(-1)?.content).toBe("Review complete");
+    expect(controller.state.lastWallDurationMs).toBe(1250);
+    expect(controller.state.lastActiveDurationMs).toBe(1000);
+    expect(controller.state.telemetryRecorded).toBe(true);
     controller.dispose();
     expect(api.closed).toBe(true);
   });
@@ -94,14 +106,16 @@ describe("desktop controller", () => {
     expect(controller.state.snapshot.projectTree).toEqual([]);
   });
 
-  it("switches the embedded runtime workspace and reloads a clean session", async () => {
+  it("switches the embedded runtime workspace and restores its resumable session", async () => {
     const api = new FakeApi();
     const controller = createDesktopController(api);
     controller.state.currentSessionId = "session-old";
     controller.state.conversation.push({ id: "message", role: "user", content: "old" });
     await controller.openWorkspace("D:/workspace/new");
     expect(api.openWorkspace).toHaveBeenCalledWith("D:/workspace/new");
-    expect(controller.state.conversation).toEqual([]);
+    expect(controller.state.conversation).toEqual([
+      { id: "history-1", role: "agent", content: "Previous answer" },
+    ]);
     expect(api.loadWorkspace).toHaveBeenLastCalledWith(undefined);
   });
 
@@ -124,5 +138,17 @@ describe("desktop controller", () => {
       controller.selectWorkspace(workspace);
       expect(controller.state.activeWorkspace).toBe(workspace);
     }
+  });
+
+  it("restores a selected session through the shared backend history", async () => {
+    const api = new FakeApi();
+    const controller = createDesktopController(api);
+    await controller.load();
+    controller.state.currentSessionId = undefined;
+    await controller.selectSession("session-1");
+    expect(api.loadSession).toHaveBeenCalledWith("session-1");
+    expect(controller.state.conversation).toEqual([
+      { id: "history-1", role: "agent", content: "Previous answer" },
+    ]);
   });
 });

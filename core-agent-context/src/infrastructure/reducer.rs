@@ -20,6 +20,8 @@ pub struct ReducerConfig {
     pub keep_recent_messages: usize,
     /// 是否生成摘要（超出部分压缩为摘要）
     pub enable_summary: bool,
+    /// 达到全局预算的百分比后启用消息窗口/摘要策略。
+    pub trigger_percent: u8,
     /// 各 Slot 的预算（0 表示使用全局预算按比例分配）
     pub slot_budgets: HashMap<ContextSlot, u64>,
 }
@@ -30,6 +32,7 @@ impl Default for ReducerConfig {
             max_total_tokens: 128_000,
             keep_recent_messages: 20,
             enable_summary: false,
+            trigger_percent: 80,
             slot_budgets: HashMap::new(),
         }
     }

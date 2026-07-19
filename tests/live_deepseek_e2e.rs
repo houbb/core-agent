@@ -20,6 +20,7 @@ async fn deepseek_reads_an_unknown_workspace_file_through_the_tool_loop() {
         api_key: Some(api_key),
         model: std::env::var("CORE_AGENT_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".into()),
         profile: "live-e2e".into(),
+        max_context_tokens: 128_000,
     };
     let agent = EnterpriseAgent::open(config).await.unwrap();
     let run = agent
@@ -59,6 +60,7 @@ async fn deepseek_receives_file_and_folder_mentions_without_a_read_tool_call() {
         api_key: Some(api_key),
         model: std::env::var("CORE_AGENT_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".into()),
         profile: "live-mention-e2e".into(),
+        max_context_tokens: 128_000,
     };
     let agent = EnterpriseAgent::open(config).await.unwrap();
     let run = agent

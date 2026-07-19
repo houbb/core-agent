@@ -244,6 +244,7 @@ async fn terminal_and_desktop_composition_runs_runtimes_in_one_process() {
         api_key: None,
         model: "test-model".into(),
         profile: "default".into(),
+        max_context_tokens: 128_000,
     };
     let agent = EnterpriseAgent::with_model(config, deterministic_model().await)
         .await
@@ -291,6 +292,18 @@ async fn terminal_and_desktop_composition_runs_runtimes_in_one_process() {
         .iter()
         .any(|event| event.kind == "tool_completed"));
     assert!(run.events.last().unwrap().is_terminal());
+    assert!(run.telemetry_recorded);
+    assert!(run.wall_duration_ms >= run.active_duration_ms);
+    let request_metrics = agent.request_metrics(0, 10).await.unwrap();
+    assert_eq!(request_metrics.len(), 1);
+    assert_eq!(request_metrics[0].id, run.request_id);
+    assert_eq!(request_metrics[0].session_id, Some(run.session_id));
+    assert_eq!(
+        request_metrics[0].status,
+        core_agent::RequestStatus::Completed
+    );
+    assert_eq!(request_metrics[0].entrypoint, "embedded");
+    assert!(request_metrics[0].context_tokens > 0);
 
     let conversations = agent
         .sessions()
@@ -356,6 +369,7 @@ async fn denied_tool_call_is_a_terminal_agent_failure() {
         api_key: None,
         model: "test-model".into(),
         profile: "default".into(),
+        max_context_tokens: 128_000,
     };
     let agent = EnterpriseAgent::with_model(config, deterministic_model().await)
         .await
@@ -434,6 +448,7 @@ async fn workspace_edit_requires_a_person_and_then_completes_end_to_end() {
         api_key: None,
         model: "test-model".into(),
         profile: "default".into(),
+        max_context_tokens: 128_000,
     };
     let agent = EnterpriseAgent::with_model(config, workspace_write_model().await)
         .await
@@ -513,6 +528,7 @@ async fn workspace_edit_requires_a_person_and_then_completes_end_to_end() {
         api_key: None,
         model: "test-model".into(),
         profile: "default".into(),
+        max_context_tokens: 128_000,
     };
     auto_config.permission_mode = PermissionMode::Auto;
     let auto_agent = EnterpriseAgent::with_model(auto_config, workspace_write_model().await)
@@ -547,6 +563,7 @@ async fn shared_mentions_and_slash_commands_are_end_to_end_and_zero_model_when_l
         api_key: None,
         model: "test-model".into(),
         profile: "default".into(),
+        max_context_tokens: 128_000,
     };
     let agent = EnterpriseAgent::with_model(config, interaction_model(calls.clone()).await)
         .await

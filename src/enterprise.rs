@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use core_agent_agent::{AgentManager, RuntimeAgentCoordinator};
 use core_agent_collaboration::{CollaborationPlatformManager, TeamProject};
-use core_agent_config::AgentConfig;
+use core_agent_config::{project_storage_key, AgentConfig, ConfigCompression};
 use core_agent_context::{
     BuildContextRequest, Context, ContextRuntime, SqliteContextSnapshotStore,
 };
@@ -18,9 +18,10 @@ use core_agent_governance::{
 use core_agent_kernel::{ManagedRuntime, RuntimeKernel};
 use core_agent_memory::MemoryManager;
 use core_agent_model::{
-    ModelCapability, ModelCatalog, ModelManager, ModelManagerBuilder, ModelMessage, ModelProfile,
-    ModelProvider, ModelRequest, ModelRole, ModelToolCall, ModelToolDefinition,
-    OpenAiCompatibleProvider, ProviderDefinition, SqliteModelStore, UsageCollector,
+    AgentRequestMetric, ModelCapability, ModelCatalog, ModelManager, ModelManagerBuilder,
+    ModelMessage, ModelProfile, ModelProvider, ModelRequest, ModelRole, ModelToolCall,
+    ModelToolDefinition, OpenAiCompatibleProvider, ProviderDefinition, RequestStatus,
+    SqliteModelStore, UsageBucket, UsageCollector,
 };
 use core_agent_multi::MultiAgentManager;
 use core_agent_plan::PlanningManager;
@@ -46,11 +47,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, RwLock};
+use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::{
-    checkpoint::CheckpointStore, ContextMentionLimits, ContextMentionResolver,
+    checkpoint::CheckpointStore, ContextMentionLimits, ContextMentionResolver, InstructionChain,
     InteractionCommandRegistry, InteractionCommandRoute, InteractionEntryAction,
+    ManagedAgentPolicy, ManagedPolicyDecision, SkillCatalog,
 };
 
 const DEFAULT_SYSTEM_PROMPT: &str =
@@ -60,24 +63,30 @@ const DEFAULT_SYSTEM_PROMPT: &str =
 #[derive(Debug, Clone)]
 pub struct EnterpriseAgentConfig {
     pub data_dir: PathBuf,
+    pub telemetry_dir: Option<PathBuf>,
+    pub entrypoint: String,
     pub workspace: PathBuf,
     pub system_prompt: String,
     pub model: EnterpriseModelConfig,
     pub permission_mode: PermissionMode,
     pub memory_enabled: bool,
     pub context_mentions: ContextMentionLimits,
+    pub context_compression: ConfigCompression,
 }
 
 impl EnterpriseAgentConfig {
     pub fn new(data_dir: impl Into<PathBuf>, workspace: impl Into<PathBuf>) -> Self {
         Self {
             data_dir: data_dir.into(),
+            telemetry_dir: None,
+            entrypoint: "embedded".into(),
             workspace: workspace.into(),
             system_prompt: DEFAULT_SYSTEM_PROMPT.into(),
             model: EnterpriseModelConfig::default(),
             permission_mode: PermissionMode::RiskBased,
             memory_enabled: true,
             context_mentions: ContextMentionLimits::default(),
+            context_compression: ConfigCompression::default(),
         }
     }
 
@@ -93,6 +102,7 @@ impl EnterpriseAgentConfig {
             api_key: config.model.api_key.clone(),
             model: config.model.name.clone(),
             profile: config.model.profile.clone(),
+            max_context_tokens: config.model.max_context_tokens,
         };
         runtime.permission_mode = PermissionMode::parse(&config.permissions.mode)?;
         runtime.memory_enabled = config.memory.enabled;
@@ -103,6 +113,7 @@ impl EnterpriseAgentConfig {
             max_total_bytes: config.context.max_total_bytes,
             max_directory_depth: config.context.max_directory_depth,
         };
+        runtime.context_compression = config.context.compression.clone();
         runtime.validate()?;
         Ok(runtime)
     }
@@ -113,9 +124,22 @@ impl EnterpriseAgentConfig {
                 "system prompt must contain at most 64 KiB of text".into(),
             ));
         }
-        if self.workspace.as_os_str().is_empty() || self.data_dir.as_os_str().is_empty() {
+        if self.workspace.as_os_str().is_empty()
+            || self.data_dir.as_os_str().is_empty()
+            || self.entrypoint.trim().is_empty()
+            || self.entrypoint.len() > 32
+            || self.entrypoint.chars().any(char::is_control)
+            || !matches!(
+                self.context_compression.strategy.as_str(),
+                "recent-window" | "extractive-summary"
+            )
+            || !(1..=100).contains(&self.context_compression.trigger_percent)
+            || self.context_compression.keep_recent_messages == 0
+            || self.context_compression.keep_recent_messages > 10_000
+        {
             return Err(EnterpriseAgentError::Configuration(
-                "workspace and data directory must not be empty".into(),
+                "workspace, data directory, entrypoint or compression configuration is invalid"
+                    .into(),
             ));
         }
         self.model.validate()?;
@@ -185,6 +209,7 @@ pub struct EnterpriseModelConfig {
     pub api_key: Option<String>,
     pub model: String,
     pub profile: String,
+    pub max_context_tokens: u64,
 }
 
 impl std::fmt::Debug for EnterpriseModelConfig {
@@ -196,6 +221,7 @@ impl std::fmt::Debug for EnterpriseModelConfig {
             .field("api_key_configured", &self.api_key.is_some())
             .field("model", &self.model)
             .field("profile", &self.profile)
+            .field("max_context_tokens", &self.max_context_tokens)
             .finish()
     }
 }
@@ -208,6 +234,7 @@ impl Default for EnterpriseModelConfig {
             api_key: None,
             model: "qwen3".into(),
             profile: "default".into(),
+            max_context_tokens: 128_000,
         }
     }
 }
@@ -222,6 +249,8 @@ impl EnterpriseModelConfig {
         ]
         .iter()
         .any(|value| value.trim().is_empty())
+            || self.max_context_tokens == 0
+            || self.max_context_tokens > 10_000_000
         {
             return Err(EnterpriseAgentError::Configuration(
                 "model provider, endpoint, model and profile must not be empty".into(),
@@ -253,9 +282,22 @@ impl EnterpriseAgentEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnterpriseRun {
+    pub request_id: Uuid,
     pub session_id: Uuid,
     pub response: String,
     pub events: Vec<EnterpriseAgentEvent>,
+    pub wall_duration_ms: u64,
+    pub active_duration_ms: u64,
+    pub telemetry_recorded: bool,
+}
+
+#[derive(Default)]
+struct RequestTimings {
+    approval_wait_ms: u64,
+    context_duration_ms: u64,
+    model_duration_ms: u64,
+    tool_duration_ms: u64,
+    context_tokens: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -315,6 +357,8 @@ pub struct EnterpriseAgent {
     sessions: Arc<SessionRuntime<SqliteSessionStore>>,
     contexts: Arc<ContextRuntime<SqliteSessionStore>>,
     models: Arc<ModelManager>,
+    telemetry: Arc<SqliteModelStore>,
+    permission_mode: RwLock<PermissionMode>,
     tools: Arc<ToolManager>,
     workspaces: Arc<WorkspaceManager>,
     runtimes: EnterpriseRuntimes,
@@ -322,6 +366,11 @@ pub struct EnterpriseAgent {
     operation_lock: Mutex<()>,
     approvals: Arc<EnterpriseApprovalLedger>,
     checkpoints: Arc<CheckpointStore>,
+    instructions: InstructionChain,
+    skills: Arc<SkillCatalog>,
+    memory_namespace: String,
+    managed_policy: ManagedAgentPolicy,
+    hooks: Option<Arc<crate::HookRuntime>>,
 }
 
 #[derive(Default)]
@@ -374,8 +423,9 @@ impl EnterpriseAgent {
             SqliteModelStore::new(&database_path(&config.data_dir, "model.db")?)
                 .map_err(model_error)?,
         );
-        let catalog: Arc<dyn ModelCatalog> = model_store.clone();
-        let usage: Arc<dyn UsageCollector> = model_store;
+        let catalog: Arc<dyn ModelCatalog> = model_store;
+        let telemetry = telemetry_store(&config)?;
+        let usage: Arc<dyn UsageCollector> = telemetry.clone();
         let provider: Arc<dyn ModelProvider> = Arc::new(
             OpenAiCompatibleProvider::new(
                 config.model.provider.clone(),
@@ -399,15 +449,16 @@ impl EnterpriseAgent {
             .upsert_provider(&provider)
             .await
             .map_err(model_error)?;
-        let profile = ModelProfile::new(
+        let mut profile = ModelProfile::new(
             config.model.profile.clone(),
             config.model.provider.clone(),
             config.model.model.clone(),
         )
         .with_capability(ModelCapability::Chat);
+        profile.limits.context_tokens = config.model.max_context_tokens;
         models.upsert_profile(&profile).await.map_err(model_error)?;
 
-        Self::with_model(config, models).await
+        Self::with_model_and_telemetry(config, models, telemetry).await
     }
 
     /// Injection seam used by deterministic E2E tests and private model adapters.
@@ -415,8 +466,63 @@ impl EnterpriseAgent {
         config: EnterpriseAgentConfig,
         models: Arc<ModelManager>,
     ) -> EnterpriseAgentResult<Self> {
+        let telemetry = telemetry_store(&config)?;
+        Self::with_model_and_telemetry(config, models, telemetry).await
+    }
+
+    async fn with_model_and_telemetry(
+        config: EnterpriseAgentConfig,
+        models: Arc<ModelManager>,
+        telemetry: Arc<SqliteModelStore>,
+    ) -> EnterpriseAgentResult<Self> {
         config.validate()?;
         std::fs::create_dir_all(&config.data_dir)?;
+        let managed_policy = ManagedAgentPolicy::load_from_environment()
+            .map_err(|error| EnterpriseAgentError::Configuration(error.to_string()))?
+            .map(|(policy, _)| policy)
+            .unwrap_or_default();
+        let guidance_home = crate::default_guidance_home();
+        let instructions = InstructionChain::discover(
+            guidance_home.as_deref(),
+            &config.workspace,
+            &config.workspace,
+            crate::DEFAULT_INSTRUCTION_BUDGET_BYTES,
+        )
+        .map_err(|error| EnterpriseAgentError::Configuration(error.to_string()))?;
+        let skills = Arc::new(
+            SkillCatalog::discover(
+                &crate::default_skill_roots(guidance_home.as_deref(), &config.workspace),
+                crate::DEFAULT_MAX_SKILLS,
+            )
+            .map_err(|error| EnterpriseAgentError::Configuration(error.to_string()))?,
+        );
+        let memory_namespace =
+            crate::memory_tools::project_namespace(&config.workspace).map_err(tool_error)?;
+        let memory = if config.memory_enabled && managed_policy.memory_enabled {
+            crate::memory_tools::persistent_manager(&config.data_dir).map_err(tool_error)?
+        } else {
+            Arc::new(MemoryManager::builder().build())
+        };
+        let mut local_runner = crate::LocalCommandRunner::new(&config.workspace)
+            .map_err(|error| EnterpriseAgentError::Runtime(error.to_string()))?
+            .with_sandbox_policy(managed_policy.command_sandbox_policy());
+        if std::env::var("CORE_AGENT_REQUIRE_OS_SANDBOX").as_deref() == Ok("1") {
+            let mut policy = managed_policy.command_sandbox_policy();
+            policy.requirement = crate::SandboxRequirement::Required;
+            local_runner = local_runner.with_sandbox_policy(policy);
+        }
+        let command_runner: Arc<dyn crate::CommandRunner> = Arc::new(local_runner);
+        let hooks = if managed_policy.hooks_enabled {
+            crate::HookRuntime::discover(
+                &config.workspace,
+                guidance_home.as_deref(),
+                command_runner.clone(),
+            )
+            .map_err(|error| EnterpriseAgentError::Runtime(error.to_string()))?
+            .map(Arc::new)
+        } else {
+            None
+        };
         let session_store = Arc::new(
             SqliteSessionStore::new(&database_path(&config.data_dir, "session.db")?)
                 .map_err(session_error)?,
@@ -440,7 +546,77 @@ impl EnterpriseAgent {
             CheckpointStore::new(&config.workspace, config.data_dir.join("checkpoints"))
                 .map_err(checkpoint_error)?,
         );
-        register_workspace_tools(&tools, &config.workspace, checkpoints.clone()).await?;
+        let mut workspace_tools =
+            crate::workspace_tools::registrations(&config.workspace, checkpoints.clone())
+                .map_err(tool_error)?;
+        workspace_tools.push(crate::command_runtime::registration(command_runner.clone()));
+        let background_commands = crate::BackgroundCommandManager::new(command_runner.clone());
+        workspace_tools.extend(crate::command_runtime::background_registrations(
+            background_commands,
+        ));
+        register_workspace_tools(
+            &tools,
+            &config.workspace,
+            checkpoints.clone(),
+            workspace_tools,
+        )
+        .await?;
+        load_builtin_tools(
+            &tools,
+            "guidance",
+            "Embedded Guidance",
+            crate::skill_tools::registrations(skills.clone()),
+        )
+        .await?;
+        if config.memory_enabled && managed_policy.memory_enabled {
+            load_builtin_tools(
+                &tools,
+                "memory",
+                "Embedded Durable Memory",
+                crate::memory_tools::registrations(memory.clone(), memory_namespace.clone()),
+            )
+            .await?;
+        }
+        if managed_policy.web_search_enabled {
+            if let Some(provider) = crate::OpenAiWebSearchProvider::from_environment()
+                .map_err(|error| EnterpriseAgentError::Configuration(error.to_string()))?
+            {
+                let policy = crate::WebDomainPolicy::new(
+                    managed_policy.web_allowed_domains.iter().cloned(),
+                    managed_policy.web_blocked_domains.iter().cloned(),
+                )
+                .map_err(|error| EnterpriseAgentError::Configuration(error.to_string()))?;
+                load_builtin_tools(
+                    &tools,
+                    "web",
+                    "Governed Web",
+                    crate::web_runtime::registrations(Arc::new(crate::WebRuntime::new(
+                        Arc::new(provider),
+                        policy,
+                    ))),
+                )
+                .await?;
+            }
+        }
+        let subagent_provider = crate::subagent_runtime::provider(crate::SubAgentRuntime::new(
+            models.clone(),
+            tools.clone(),
+            config.model.profile.clone(),
+        ));
+        tools
+            .load_provider(&subagent_provider)
+            .await
+            .map_err(tool_error)?;
+        for server in crate::discover_mcp_servers(&config.workspace, guidance_home.as_deref())
+            .map_err(|error| EnterpriseAgentError::Configuration(error.to_string()))?
+            .into_iter()
+            .filter(|server| managed_policy.permits_mcp_server(&server.name))
+        {
+            let provider = crate::McpToolProvider::connect(&server, &config.workspace)
+                .await
+                .map_err(|error| EnterpriseAgentError::Runtime(error.to_string()))?;
+            tools.load_provider(&provider).await.map_err(tool_error)?;
+        }
         let planning = Arc::new(PlanningManager::builder().build());
         let execution = Arc::new(
             ExecutionManager::builder()
@@ -557,7 +733,7 @@ impl EnterpriseAgent {
             planning,
             execution,
             agents,
-            memory: Arc::new(MemoryManager::builder().build()),
+            memory: memory.clone(),
             events: Arc::new(EventManager::builder().build()),
             workflows: Arc::new(WorkflowManager::builder().build()),
             multi_agent: Arc::new(MultiAgentManager::builder().build()),
@@ -570,11 +746,14 @@ impl EnterpriseAgent {
             ecosystem,
             protocols,
         };
+        let permission_mode = config.permission_mode;
         Ok(Self {
             config,
             sessions,
             contexts,
             models,
+            telemetry,
+            permission_mode: RwLock::new(permission_mode),
             tools,
             workspaces: Arc::new(WorkspaceManager::new(workspace_store)),
             runtimes,
@@ -582,6 +761,11 @@ impl EnterpriseAgent {
             operation_lock: Mutex::new(()),
             approvals,
             checkpoints,
+            instructions,
+            skills,
+            memory_namespace,
+            managed_policy,
+            hooks,
         })
     }
 
@@ -607,6 +791,61 @@ impl EnterpriseAgent {
 
     pub fn model_name(&self) -> &str {
         &self.config.model.model
+    }
+
+    pub fn max_context_tokens(&self) -> u64 {
+        self.config.model.max_context_tokens
+    }
+
+    fn composed_system_prompt(&self) -> EnterpriseAgentResult<String> {
+        let mut sections = vec![self.config.system_prompt.trim().to_owned()];
+        let instructions = self.instructions.render();
+        if !instructions.is_empty() {
+            sections.push(format!(
+                "Project instruction chain (later documents have higher precedence):\n{instructions}"
+            ));
+        }
+        let skill_metadata = self
+            .skills
+            .metadata_prompt(crate::DEFAULT_SKILL_METADATA_BUDGET_BYTES)
+            .map_err(|error| EnterpriseAgentError::Configuration(error.to_string()))?;
+        if !skill_metadata.is_empty() {
+            sections.push(format!(
+                "Available skills (call load_skill before following a skill):\n{skill_metadata}"
+            ));
+        }
+        Ok(sections.join("\n\n"))
+    }
+
+    pub async fn permission_mode(&self) -> PermissionMode {
+        *self.permission_mode.read().await
+    }
+
+    pub async fn set_permission_mode(
+        &self,
+        permission_mode: PermissionMode,
+    ) -> EnterpriseAgentResult<()> {
+        let _operation = self.operation_lock.lock().await;
+        *self.permission_mode.write().await = permission_mode;
+        Ok(())
+    }
+
+    pub async fn usage_buckets(&self, days: u32) -> EnterpriseAgentResult<Vec<UsageBucket>> {
+        self.telemetry
+            .usage_buckets(days)
+            .await
+            .map_err(model_error)
+    }
+
+    pub async fn request_metrics(
+        &self,
+        offset: u64,
+        limit: u64,
+    ) -> EnterpriseAgentResult<Vec<AgentRequestMetric>> {
+        self.telemetry
+            .list_request_metrics(offset, limit)
+            .await
+            .map_err(model_error)
     }
 
     /// Executes all zero-model built-ins from the same registry used by every
@@ -739,7 +978,7 @@ impl EnterpriseAgent {
                         "profile": self.config.model.profile,
                         "apiKeyConfigured": self.config.model.api_key.is_some(),
                     },
-                    "permissionMode": permission_mode_name(self.config.permission_mode),
+                    "permissionMode": permission_mode_name(*self.permission_mode.read().await),
                     "memory": {"enabled": self.config.memory_enabled},
                     "context": {
                         "maxMentions": self.config.context_mentions.max_mentions,
@@ -843,6 +1082,88 @@ impl EnterpriseAgent {
     ) -> EnterpriseAgentResult<EnterpriseRun> {
         let message = message.into();
         validate_message(&message)?;
+        let request_id = Uuid::new_v4();
+        let started_at = chrono::Utc::now();
+        let started = Instant::now();
+        let workspace_key = project_storage_key(&self.config.workspace)
+            .map_err(|error| EnterpriseAgentError::Configuration(error.to_string()))?;
+        let mut metric = AgentRequestMetric::running(
+            request_id,
+            workspace_key,
+            session_id,
+            self.config.entrypoint.clone(),
+            self.config.model.model.clone(),
+            started_at,
+        );
+        let began = self.telemetry.begin_request(&metric).await.is_ok();
+        let mut timings = RequestTimings::default();
+        let result = self
+            .run_with_approval_inner(
+                message,
+                session_id,
+                approval_handler,
+                request_id,
+                &mut timings,
+            )
+            .await;
+        metric.completed_at = Some(chrono::Utc::now());
+        metric.wall_duration_ms = elapsed_ms(started);
+        metric.approval_wait_ms = timings.approval_wait_ms;
+        metric.active_duration_ms = metric
+            .wall_duration_ms
+            .saturating_sub(metric.approval_wait_ms);
+        metric.context_duration_ms = timings.context_duration_ms;
+        metric.model_duration_ms = timings.model_duration_ms;
+        metric.tool_duration_ms = timings.tool_duration_ms;
+        metric.context_tokens = timings.context_tokens;
+        match &result {
+            Ok(run) => {
+                metric.session_id = Some(run.session_id);
+                metric.status = RequestStatus::Completed;
+            }
+            Err(error) => {
+                metric.status = RequestStatus::Failed;
+                metric.error_kind = Some(enterprise_error_kind(error).into());
+            }
+        }
+        let telemetry_recorded = began && self.telemetry.finish_request(&metric).await.is_ok();
+        match result {
+            Ok(mut run) => {
+                run.wall_duration_ms = metric.wall_duration_ms;
+                run.active_duration_ms = metric.active_duration_ms;
+                run.telemetry_recorded = telemetry_recorded;
+                if let Some(event) = run
+                    .events
+                    .iter_mut()
+                    .rev()
+                    .find(|event| event.is_terminal())
+                {
+                    if let Some(data) = event.data.as_object_mut() {
+                        data.insert("requestId".into(), json!(request_id));
+                        data.insert("wallDurationMs".into(), json!(metric.wall_duration_ms));
+                        data.insert("activeDurationMs".into(), json!(metric.active_duration_ms));
+                        data.insert("telemetryRecorded".into(), json!(telemetry_recorded));
+                    }
+                }
+                self.events
+                    .write()
+                    .await
+                    .insert(run.session_id, run.events.clone());
+                Ok(run)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn run_with_approval_inner(
+        &self,
+        message: String,
+        session_id: Option<Uuid>,
+        approval_handler: &dyn EnterpriseApprovalHandler,
+        request_id: Uuid,
+        timings: &mut RequestTimings,
+    ) -> EnterpriseAgentResult<EnterpriseRun> {
+        validate_message(&message)?;
         let (command_context, read_only) = if message.starts_with('/') {
             let invocation = InteractionCommandRegistry::with_builtins()
                 .parse(&message)
@@ -873,7 +1194,7 @@ impl EnterpriseAgent {
         let mention_context = mentions
             .context_text()
             .map_err(|error| EnterpriseAgentError::InvalidArgument(error.to_string()))?;
-        let explicit_context = match (command_context, mention_context) {
+        let mut explicit_context = match (command_context, mention_context) {
             (Some(command), Some(mentions)) => Some(format!(
                 "Built-in command expansion:\n{command}\n\nExplicit @ context:\n{mentions}"
             )),
@@ -882,6 +1203,7 @@ impl EnterpriseAgent {
             (None, None) => None,
         };
         let _operation = self.operation_lock.lock().await;
+        let permission_mode = *self.permission_mode.read().await;
         let session = self.ensure_session(session_id, &message).await?;
         let session_id = parse_uuid(&session.id, "session")?;
         self.checkpoints
@@ -906,7 +1228,7 @@ impl EnterpriseAgent {
         let mut events = vec![EnterpriseAgentEvent {
             kind: "execution_started".into(),
             message: "Enterprise Agent accepted the request".into(),
-            data: json!({"sessionId": session_id, "readOnly": read_only}),
+            data: json!({"sessionId": session_id, "requestId": request_id, "readOnly": read_only}),
         }];
         if !mentions.is_empty() {
             events.push(EnterpriseAgentEvent {
@@ -919,20 +1241,86 @@ impl EnterpriseAgent {
                 }),
             });
         }
+        events.push(EnterpriseAgentEvent {
+            kind: "guidance_loaded".into(),
+            message: format!(
+                "Loaded {} instruction document(s) and discovered {} skill(s)",
+                self.instructions.documents.len(),
+                self.skills.descriptors().len()
+            ),
+            data: json!({
+                "instructionDocuments": self.instructions.documents.iter().map(|document| json!({
+                    "scope": document.scope,
+                    "precedence": document.precedence,
+                    "sha256": document.content_sha256,
+                    "bytes": document.bytes,
+                })).collect::<Vec<_>>(),
+                "skills": self.skills.descriptors().iter().map(|skill| json!({
+                    "name": skill.name,
+                    "scope": skill.scope,
+                    "sha256": skill.content_sha256,
+                    "bytes": skill.bytes,
+                })).collect::<Vec<_>>(),
+            }),
+        });
+        if let Some(hooks) = &self.hooks {
+            let results = hooks
+                .run(
+                    crate::HookInvocation {
+                        event: crate::HookEvent::AgentStart,
+                        session_id: Some(session_id),
+                        tool: None,
+                        payload: json!({"requestId": request_id}),
+                    },
+                    tokio_util::sync::CancellationToken::new(),
+                )
+                .await
+                .map_err(|error| EnterpriseAgentError::Runtime(error.to_string()))?;
+            append_hook_events(&mut events, crate::HookEvent::AgentStart, &results);
+        }
+        if self.config.memory_enabled && self.managed_policy.memory_enabled {
+            let recalled = crate::memory_tools::recall_for_prompt(
+                &self.runtimes.memory,
+                &self.memory_namespace,
+                session_id,
+                &message,
+                16 * 1024,
+            )
+            .await
+            .map_err(tool_error)?;
+            if !recalled.is_empty() {
+                append_explicit_context(
+                    &mut explicit_context,
+                    "Relevant durable memory (may be stale; prefer current user input and project instructions)",
+                    &recalled,
+                );
+                events.push(EnterpriseAgentEvent {
+                    kind: "memory_recalled".into(),
+                    message: "Relevant durable project/session memory entered context".into(),
+                    data: json!({"bytes": recalled.len(), "namespace": self.memory_namespace}),
+                });
+            }
+        }
 
-        let context = match self
+        let context_started = Instant::now();
+        let context_result = self
             .contexts
             .build(BuildContextRequest {
                 session_id: session.id.clone(),
                 conversation_id: Some(conversation.id.clone()),
-                system_prompt: Some(self.config.system_prompt.clone()),
+                system_prompt: Some(self.composed_system_prompt()?),
                 user_input: explicit_context,
-                max_messages: Some(100),
-                max_tokens: Some(128_000),
+                max_messages: Some(self.config.context_compression.keep_recent_messages),
+                max_tokens: Some(self.config.model.max_context_tokens),
+                compression_strategy: Some(self.config.context_compression.strategy.clone()),
+                compression_trigger_percent: Some(self.config.context_compression.trigger_percent),
                 working_directory: Some(self.config.workspace.to_string_lossy().into_owned()),
             })
-            .await
-        {
+            .await;
+        timings.context_duration_ms = timings
+            .context_duration_ms
+            .saturating_add(elapsed_ms(context_started));
+        let context = match context_result {
             Ok(context) => context,
             Err(error) => {
                 let error = context_error(error);
@@ -940,24 +1328,48 @@ impl EnterpriseAgent {
                 return Err(error);
             }
         };
+        timings.context_tokens = context.total_tokens;
         events.push(EnterpriseAgentEvent {
             kind: "context_built".into(),
             message: "Session context assembled".into(),
-            data: json!({"contextId": context.id, "tokens": context.total_tokens, "hash": context.hash}),
+            data: json!({
+                "contextId": context.id,
+                "tokens": context.total_tokens,
+                "maxTokens": self.config.model.max_context_tokens,
+                "tokenDistribution": &context.token_distribution,
+                "buildDurationMs": context.build_duration_ms,
+                "estimated": true,
+                "hash": &context.hash
+            }),
         });
 
-        let definitions = self.tools.list().await.map_err(tool_error)?;
+        let definitions = self
+            .tools
+            .list()
+            .await
+            .map_err(tool_error)?
+            .into_iter()
+            .filter(|definition| {
+                self.managed_policy.evaluate_tool(definition) == ManagedPolicyDecision::Allow
+            })
+            .collect::<Vec<_>>();
         let mut request = context_model_request(&context, &self.config.model.profile, session_id)?;
+        request.id = request_id;
         let exposed_definitions = definitions
             .iter()
-            .filter(|definition| !read_only || definition.category != "filesystem.write")
+            .filter(|definition| !read_only || tool_allowed_in_read_only(definition))
             .cloned()
             .collect::<Vec<_>>();
         request.tools = model_tool_definitions(&exposed_definitions)?;
         let mut response_text = None;
         let mut tool_call_count = 0_usize;
         for turn in 0..8_u8 {
-            let response = match self.models.generate(request.clone()).await {
+            let model_started = Instant::now();
+            let response_result = self.models.generate(request.clone()).await;
+            timings.model_duration_ms = timings
+                .model_duration_ms
+                .saturating_add(elapsed_ms(model_started));
+            let response = match response_result {
                 Ok(response) => response,
                 Err(error) => {
                     let error = model_error(error);
@@ -997,7 +1409,7 @@ impl EnterpriseAgent {
             for call in &response.tool_calls {
                 let definition = resolve_tool_definition(&definitions, &call.name)?;
                 if read_only
-                    && (definition.category == "filesystem.write"
+                    && (!tool_allowed_in_read_only(definition)
                         || (definition.category == "process.execute"
                             && !safe_command(&call.arguments)))
                 {
@@ -1012,11 +1424,8 @@ impl EnterpriseAgent {
                     ToolRequest::new(definition.key.clone(), call.arguments.clone());
                 tool_request.session_id = Some(session_id);
                 tool_request.subject = Some("local-user".into());
-                let permission = tool_permission_requirement(
-                    self.config.permission_mode,
-                    definition,
-                    &call.arguments,
-                );
+                let permission =
+                    tool_permission_requirement(permission_mode, definition, &call.arguments);
                 if permission == PermissionDecision::Deny {
                     let error = EnterpriseAgentError::Tool(format!(
                         "tool {} is denied by the active permission policy",
@@ -1033,7 +1442,7 @@ impl EnterpriseAgent {
                         risk: tool_risk(definition, &call.arguments).into(),
                         reason: format!(
                             "{} mode requires approval for {}",
-                            permission_mode_name(self.config.permission_mode),
+                            permission_mode_name(permission_mode),
                             definition.category
                         ),
                         parameters: call.arguments.clone(),
@@ -1043,7 +1452,11 @@ impl EnterpriseAgent {
                         message: format!("Approval required for {}", definition.name),
                         data: serde_json::to_value(&approval)?,
                     });
+                    let approval_started = Instant::now();
                     let decision = approval_handler.decide(&approval).await;
+                    timings.approval_wait_ms = timings
+                        .approval_wait_ms
+                        .saturating_add(elapsed_ms(approval_started));
                     events.push(EnterpriseAgentEvent {
                         kind: "approval_decided".into(),
                         message: format!("Approval {:?} for {}", decision, definition.name),
@@ -1058,10 +1471,42 @@ impl EnterpriseAgent {
                         return Err(error);
                     }
                 }
+                if let Some(hooks) = &self.hooks {
+                    let hook_result = hooks
+                        .run(
+                            crate::HookInvocation {
+                                event: crate::HookEvent::BeforeTool,
+                                session_id: Some(session_id),
+                                tool: Some(definition.name.clone()),
+                                payload: json!({
+                                    "requestId": request_id,
+                                    "toolRequestId": tool_request.id,
+                                    "parameters": call.arguments,
+                                }),
+                            },
+                            tokio_util::sync::CancellationToken::new(),
+                        )
+                        .await;
+                    match hook_result {
+                        Ok(results) => {
+                            append_hook_events(&mut events, crate::HookEvent::BeforeTool, &results)
+                        }
+                        Err(error) => {
+                            let error = EnterpriseAgentError::Runtime(error.to_string());
+                            self.record_failure(session_id, &mut events, &error).await;
+                            return Err(error);
+                        }
+                    }
+                }
                 if definition.default_permission == PermissionDecision::Ask {
                     self.approvals.approve(tool_request.id)?;
                 }
-                let result = match self.tools.execute(tool_request).await {
+                let tool_started = Instant::now();
+                let tool_result = self.tools.execute(tool_request).await;
+                timings.tool_duration_ms = timings
+                    .tool_duration_ms
+                    .saturating_add(elapsed_ms(tool_started));
+                let result = match tool_result {
                     Ok(result) => result,
                     Err(error) => {
                         let error = tool_error(error);
@@ -1083,6 +1528,35 @@ impl EnterpriseAgent {
                     self.record_failure(session_id, &mut events, &error).await;
                     return Err(error);
                 }
+                if let Some(hooks) = &self.hooks {
+                    let hook_result = hooks
+                        .run(
+                            crate::HookInvocation {
+                                event: crate::HookEvent::AfterTool,
+                                session_id: Some(session_id),
+                                tool: Some(definition.name.clone()),
+                                payload: json!({
+                                    "requestId": request_id,
+                                    "toolRequestId": result.request_id,
+                                    "status": result.status,
+                                    "durationMs": result.usage.duration_ms,
+                                    "outputBytes": result.usage.output_bytes,
+                                }),
+                            },
+                            tokio_util::sync::CancellationToken::new(),
+                        )
+                        .await;
+                    match hook_result {
+                        Ok(results) => {
+                            append_hook_events(&mut events, crate::HookEvent::AfterTool, &results)
+                        }
+                        Err(error) => {
+                            let error = EnterpriseAgentError::Runtime(error.to_string());
+                            self.record_failure(session_id, &mut events, &error).await;
+                            return Err(error);
+                        }
+                    }
+                }
                 let content = serde_json::to_string(&result)?;
                 if let Err(error) = self
                     .append_completed_message(&conversation.id, "TOOL", &content)
@@ -1103,7 +1577,6 @@ impl EnterpriseAgent {
                 ));
                 tool_call_count += 1;
             }
-            request.id = Uuid::new_v4();
             request.created_at = chrono::Utc::now();
         }
 
@@ -1137,6 +1610,32 @@ impl EnterpriseAgent {
                 }),
             });
         }
+        if let Some(hooks) = &self.hooks {
+            let hook_result = hooks
+                .run(
+                    crate::HookInvocation {
+                        event: crate::HookEvent::AgentFinish,
+                        session_id: Some(session_id),
+                        tool: None,
+                        payload: json!({
+                            "requestId": request_id,
+                            "toolCalls": tool_call_count,
+                        }),
+                    },
+                    tokio_util::sync::CancellationToken::new(),
+                )
+                .await;
+            match hook_result {
+                Ok(results) => {
+                    append_hook_events(&mut events, crate::HookEvent::AgentFinish, &results)
+                }
+                Err(error) => {
+                    let error = EnterpriseAgentError::Runtime(error.to_string());
+                    self.record_failure(session_id, &mut events, &error).await;
+                    return Err(error);
+                }
+            }
+        }
         events.push(EnterpriseAgentEvent {
             kind: "execution_finished".into(),
             message: response_text.clone(),
@@ -1144,9 +1643,13 @@ impl EnterpriseAgent {
         });
         self.events.write().await.insert(session_id, events.clone());
         Ok(EnterpriseRun {
+            request_id,
             session_id,
             response: response_text,
             events,
+            wall_duration_ms: 0,
+            active_duration_ms: 0,
+            telemetry_recorded: false,
         })
     }
 
@@ -1302,10 +1805,30 @@ impl EnterpriseAgent {
     }
 }
 
+async fn load_builtin_tools(
+    manager: &Arc<ToolManager>,
+    key: &str,
+    name: &str,
+    registrations: Vec<ToolRegistration>,
+) -> EnterpriseAgentResult<()> {
+    if registrations.is_empty() {
+        return Ok(());
+    }
+    manager
+        .load_provider(&StaticToolProvider::new(
+            ToolProviderDefinition::new(key, name, ToolProviderKind::Builtin),
+            registrations,
+        ))
+        .await
+        .map_err(tool_error)?;
+    Ok(())
+}
+
 async fn register_workspace_tools(
     manager: &Arc<ToolManager>,
     workspace: &Path,
     checkpoints: Arc<CheckpointStore>,
+    mut extra_tools: Vec<ToolRegistration>,
 ) -> EnterpriseAgentResult<()> {
     let root = std::fs::canonicalize(workspace).map_err(|error| {
         EnterpriseAgentError::Workspace(format!(
@@ -1423,41 +1946,14 @@ async fn register_workspace_tools(
         }
     }));
 
-    let mut command_definition = ToolDefinition::new(
-        "workspace",
-        "run_command",
-        "1.0.0",
-        json!({
-            "type": "object",
-            "required": ["command"],
-            "properties": {
-                "command": {"type": "string", "description": "Command executed with the workspace as current directory"},
-                "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 120000}
-            },
-            "additionalProperties": false
-        }),
-    );
-    command_definition.description = "Run a bounded command in the opened workspace. Secrets are removed from the child environment and destructive system commands are denied.".into();
-    command_definition.category = "process.execute".into();
-    command_definition.default_permission = PermissionDecision::Ask;
-    command_definition.timeout_ms = 120_000;
-    let command_key = command_definition.key.clone();
-    let command_root = root;
-    let command_tool = Arc::new(FunctionTool::new(command_key, move |request, _| {
-        let root = command_root.clone();
-        async move { run_workspace_command(&root, &request.parameters).await }
-    }));
-
+    let mut registrations = vec![
+        ToolRegistration::new(list_definition, list_tool),
+        ToolRegistration::new(read_definition, read_tool),
+        ToolRegistration::new(write_definition, write_tool),
+    ];
+    registrations.append(&mut extra_tools);
     manager
-        .load_provider(&StaticToolProvider::new(
-            provider,
-            vec![
-                ToolRegistration::new(list_definition, list_tool),
-                ToolRegistration::new(read_definition, read_tool),
-                ToolRegistration::new(write_definition, write_tool),
-                ToolRegistration::new(command_definition, command_tool),
-            ],
-        ))
+        .load_provider(&StaticToolProvider::new(provider, registrations))
         .await
         .map_err(tool_error)?;
     Ok(())
@@ -1640,79 +2136,7 @@ fn resolve_workspace_write_path(root: &Path, relative: &str) -> Result<PathBuf, 
     Ok(candidate)
 }
 
-async fn run_workspace_command(
-    root: &Path,
-    parameters: &Value,
-) -> Result<RawToolOutput, ToolError> {
-    let command = parameters
-        .get("command")
-        .and_then(Value::as_str)
-        .ok_or_else(|| ToolError::InvalidArgument("run_command command is required".into()))?;
-    if command.trim().is_empty()
-        || command.len() > 16 * 1024
-        || command.contains('\0')
-        || hard_denied_command(command)
-    {
-        return Err(ToolError::PermissionDenied(
-            "command is empty, oversized or blocked by the hard safety policy".into(),
-        ));
-    }
-    let timeout_ms = parameters
-        .get("timeout_ms")
-        .and_then(Value::as_u64)
-        .unwrap_or(120_000)
-        .clamp(1_000, 120_000);
-    #[cfg(windows)]
-    let mut process = {
-        let mut process = tokio::process::Command::new("powershell");
-        process.args(["-NoProfile", "-NonInteractive", "-Command", command]);
-        process
-    };
-    #[cfg(not(windows))]
-    let mut process = {
-        let mut process = tokio::process::Command::new("sh");
-        process.args(["-lc", command]);
-        process
-    };
-    process
-        .current_dir(root)
-        .kill_on_drop(true)
-        .env_remove("CORE_AGENT_API_KEY")
-        .env_remove("OPENAI_API_KEY")
-        .env_remove("ANTHROPIC_API_KEY")
-        .env_remove("DEEPSEEK_API_KEY")
-        .env_remove("DASHSCOPE_API_KEY");
-    let output = tokio::time::timeout(
-        std::time::Duration::from_millis(timeout_ms),
-        process.output(),
-    )
-    .await
-    .map_err(|_| ToolError::Timeout {
-        tool: "run_command".into(),
-        timeout_ms,
-    })?
-    .map_err(|error| ToolError::execution("run_command", error.to_string(), true))?;
-    let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
-    if !output.stderr.is_empty() {
-        if !combined.is_empty() {
-            combined.push('\n');
-        }
-        combined.push_str(&String::from_utf8_lossy(&output.stderr));
-    }
-    if combined.len() > 1024 * 1024 {
-        combined.truncate(1024 * 1024);
-        combined.push_str("\n[output truncated at 1 MiB]");
-    }
-    if !output.status.success() {
-        return Err(ToolError::execution(
-            "run_command",
-            format!("exit {}: {combined}", output.status),
-            false,
-        ));
-    }
-    Ok(RawToolOutput::text(combined))
-}
-
+#[cfg(test)]
 fn hard_denied_command(command: &str) -> bool {
     let normalized = command.to_ascii_lowercase();
     [
@@ -1873,6 +2297,42 @@ fn tool_permission_requirement(
     }
 }
 
+fn tool_allowed_in_read_only(definition: &ToolDefinition) -> bool {
+    !matches!(
+        definition.category.as_str(),
+        "filesystem.write" | "memory.write" | "process.cancel" | "mcp.remote"
+    )
+}
+
+fn append_explicit_context(target: &mut Option<String>, label: &str, value: &str) {
+    let section = format!("{label}:\n{value}");
+    match target {
+        Some(existing) => {
+            existing.push_str("\n\n");
+            existing.push_str(&section);
+        }
+        None => *target = Some(section),
+    }
+}
+
+fn append_hook_events(
+    events: &mut Vec<EnterpriseAgentEvent>,
+    event: crate::HookEvent,
+    results: &[crate::HookResult],
+) {
+    events.extend(results.iter().map(|result| EnterpriseAgentEvent {
+        kind: "hook_completed".into(),
+        message: format!("Hook {} completed", result.hook),
+        data: json!({
+            "event": event,
+            "hook": result.hook,
+            "success": result.success,
+            "exitCode": result.exit_code,
+            "durationMs": result.duration_ms,
+        }),
+    }));
+}
+
 fn safe_command(parameters: &Value) -> bool {
     let command = parameters
         .get("command")
@@ -1993,6 +2453,36 @@ fn database_path(directory: &Path, name: &str) -> EnterpriseAgentResult<String> 
         .ok_or_else(|| {
             EnterpriseAgentError::Configuration("database path is not valid UTF-8".into())
         })
+}
+
+fn telemetry_store(config: &EnterpriseAgentConfig) -> EnterpriseAgentResult<Arc<SqliteModelStore>> {
+    let directory = config
+        .telemetry_dir
+        .as_deref()
+        .unwrap_or(config.data_dir.as_path());
+    std::fs::create_dir_all(directory)?;
+    SqliteModelStore::new(&database_path(directory, "observability.db")?)
+        .map(Arc::new)
+        .map_err(model_error)
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+fn enterprise_error_kind(error: &EnterpriseAgentError) -> &'static str {
+    match error {
+        EnterpriseAgentError::InvalidArgument(_) => "INVALID_ARGUMENT",
+        EnterpriseAgentError::Configuration(_) => "CONFIGURATION",
+        EnterpriseAgentError::Session(_) => "SESSION",
+        EnterpriseAgentError::Context(_) => "CONTEXT",
+        EnterpriseAgentError::Model(_) => "MODEL",
+        EnterpriseAgentError::Tool(_) => "TOOL",
+        EnterpriseAgentError::Workspace(_) => "WORKSPACE",
+        EnterpriseAgentError::Runtime(_) => "RUNTIME",
+        EnterpriseAgentError::Io(_) => "IO",
+        EnterpriseAgentError::Serialization(_) => "SERIALIZATION",
+    }
 }
 
 fn parse_uuid(value: &str, label: &str) -> EnterpriseAgentResult<Uuid> {
