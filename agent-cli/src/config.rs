@@ -1,12 +1,14 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use core_agent::{standard_config_manager, ConfigManager, ConfigRequest, ConfigSourceInfo};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::{CliError, CliResult};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CliConfig {
     pub server: ServerConfig,
     pub model: ModelConfig,
@@ -14,6 +16,23 @@ pub struct CliConfig {
     pub memory: MemoryConfig,
     #[serde(default)]
     pub permissions: PermissionsConfig,
+    #[serde(default)]
+    pub session: SessionConfig,
+    #[serde(default)]
+    pub context: ContextConfig,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<ConfigSourceInfo>,
+    #[serde(skip)]
+    api_key: Option<String>,
+}
+
+impl std::fmt::Debug for CliConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CliConfig")
+            .field("redacted", &self.redacted())
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,7 +52,7 @@ pub struct ModelConfig {
     pub name: String,
     #[serde(default = "default_model_profile")]
     pub profile: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key_env: Option<String>,
 }
 
@@ -60,6 +79,34 @@ impl Default for PermissionsConfig {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionConfig {
+    pub resume_last: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextConfig {
+    pub max_mentions: usize,
+    pub max_files: usize,
+    pub max_file_bytes: usize,
+    pub max_total_bytes: usize,
+    pub max_directory_depth: usize,
+}
+
+impl Default for ContextConfig {
+    fn default() -> Self {
+        Self {
+            max_mentions: 16,
+            max_files: 128,
+            max_file_bytes: 256 * 1024,
+            max_total_bytes: 1024 * 1024,
+            max_directory_depth: 8,
+        }
+    }
+}
+
 impl Default for CliConfig {
     fn default() -> Self {
         Self {
@@ -68,7 +115,7 @@ impl Default for CliConfig {
                 url: None,
             },
             model: ModelConfig {
-                provider: "ollama".into(),
+                provider: "deepseek".into(),
                 endpoint: default_model_endpoint(),
                 name: default_model_name(),
                 profile: default_model_profile(),
@@ -77,6 +124,10 @@ impl Default for CliConfig {
             workspace: WorkspaceConfig { root: ".".into() },
             memory: MemoryConfig { enabled: true },
             permissions: PermissionsConfig::default(),
+            session: SessionConfig::default(),
+            context: ContextConfig::default(),
+            sources: Vec::new(),
+            api_key: None,
         }
     }
 }
@@ -92,22 +143,93 @@ impl CliConfig {
             )));
         }
         fs::create_dir_all(directory.join("memory"))?;
-        let config = Self::default();
-        fs::write(&config_path, serde_yaml::to_string(&config)?)?;
+        let project = ProjectEntryConfig {
+            server: Some(ServerConfig {
+                mode: default_server_mode(),
+                url: None,
+            }),
+            workspace: Some(WorkspaceConfig { root: ".".into() }),
+        };
+        fs::write(&config_path, serde_yaml::to_string(&project)?)?;
         fs::write(
             directory.join("context.yaml"),
             "version: 1\ninclude: []\nexclude: []\n",
         )?;
+        Ok(Self::default())
+    }
+
+    pub async fn load(root: &Path) -> CliResult<Self> {
+        let manager = standard_config_manager().map_err(config_error)?;
+        Self::resolve(root, &manager).await
+    }
+
+    pub async fn resolve(root: &Path, manager: &ConfigManager) -> CliResult<Self> {
+        let resolved = manager
+            .resolve(&ConfigRequest::new(root))
+            .await
+            .map_err(config_error)?;
+        let entry = load_project_entry(root)?;
+        let config = Self {
+            server: entry.server.unwrap_or_else(|| Self::default().server),
+            workspace: entry.workspace.unwrap_or_else(|| Self::default().workspace),
+            model: ModelConfig {
+                provider: resolved.config.model.provider.clone(),
+                endpoint: resolved.config.model.endpoint.clone(),
+                name: resolved.config.model.name.clone(),
+                profile: resolved.config.model.profile.clone(),
+                api_key_env: resolved
+                    .config
+                    .model
+                    .api_key_ref
+                    .as_deref()
+                    .and_then(|value| value.strip_prefix("env:"))
+                    .map(str::to_owned),
+            },
+            memory: MemoryConfig {
+                enabled: resolved.config.memory.enabled,
+            },
+            permissions: PermissionsConfig {
+                mode: resolved.config.permissions.mode.clone(),
+            },
+            session: SessionConfig {
+                resume_last: resolved.config.session.resume_last,
+            },
+            context: ContextConfig {
+                max_mentions: resolved.config.context.max_mentions,
+                max_files: resolved.config.context.max_files,
+                max_file_bytes: resolved.config.context.max_file_bytes,
+                max_total_bytes: resolved.config.context.max_total_bytes,
+                max_directory_depth: resolved.config.context.max_directory_depth,
+            },
+            sources: resolved.sources,
+            api_key: resolved.config.model.api_key,
+        };
+        config.validate()?;
         Ok(config)
     }
 
-    pub fn load(root: &Path) -> CliResult<Self> {
-        let path = agent_directory(root).join("config.yaml");
-        let config: Self = serde_yaml::from_str(&fs::read_to_string(&path).map_err(|error| {
-            CliError::Configuration(format!("cannot read {}: {error}", path.display()))
-        })?)?;
-        config.validate()?;
-        Ok(config)
+    pub fn api_key(&self) -> Option<String> {
+        self.api_key.clone()
+    }
+
+    pub fn redacted(&self) -> Value {
+        json!({
+            "server": self.server,
+            "model": {
+                "provider": self.model.provider,
+                "endpoint": self.model.endpoint,
+                "name": self.model.name,
+                "profile": self.model.profile,
+                "apiKeyConfigured": self.api_key.is_some(),
+                "apiKeyEnv": self.model.api_key_env,
+            },
+            "workspace": self.workspace,
+            "memory": self.memory,
+            "permissions": self.permissions,
+            "session": self.session,
+            "context": self.context,
+            "sources": self.sources,
+        })
     }
 
     pub fn validate(&self) -> CliResult<()> {
@@ -131,24 +253,56 @@ impl CliConfig {
                 self.permissions.mode.as_str(),
                 "strict" | "risk-based" | "auto"
             )
+            || self.context.max_mentions == 0
+            || self.context.max_files == 0
+            || self.context.max_total_bytes < self.context.max_file_bytes
+            || self.context.max_directory_depth == 0
         {
             return Err(CliError::Configuration(
-                "server, model or workspace configuration is invalid".into(),
-            ));
-        }
-        if self.model.api_key_env.as_ref().is_some_and(|name| {
-            name.is_empty()
-                || name.len() > 128
-                || !name
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-        }) {
-            return Err(CliError::Configuration(
-                "model api_key_env must be a valid environment variable name".into(),
+                "server, model, workspace or context configuration is invalid".into(),
             ));
         }
         Ok(())
     }
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct ProjectEntryConfig {
+    #[serde(default)]
+    server: Option<ServerConfig>,
+    #[serde(default)]
+    workspace: Option<WorkspaceConfig>,
+}
+
+fn load_project_entry(root: &Path) -> CliResult<ProjectEntryConfig> {
+    let directory = agent_directory(root);
+    let paths = ["config.yaml", "config.yml", "config.json"]
+        .into_iter()
+        .map(|name| directory.join(name))
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
+    let Some(path) = paths.first() else {
+        return Ok(ProjectEntryConfig::default());
+    };
+    if paths.len() > 1 {
+        return Err(CliError::Configuration(format!(
+            "project configuration is ambiguous: {}",
+            paths
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
+    }
+    let bytes = fs::read(path)?;
+    match path.extension().and_then(|value| value.to_str()) {
+        Some("json") => serde_json::from_slice(&bytes).map_err(CliError::from),
+        _ => serde_yaml::from_slice(&bytes).map_err(CliError::from),
+    }
+}
+
+fn config_error(error: impl std::fmt::Display) -> CliError {
+    CliError::Configuration(error.to_string())
 }
 
 fn default_server_mode() -> String {
@@ -156,11 +310,11 @@ fn default_server_mode() -> String {
 }
 
 fn default_model_endpoint() -> String {
-    "http://127.0.0.1:11434/v1".into()
+    "https://api.deepseek.com".into()
 }
 
 fn default_model_name() -> String {
-    "qwen3".into()
+    "deepseek-v4-flash".into()
 }
 
 fn default_model_profile() -> String {
@@ -188,23 +342,34 @@ impl LocalSessionState {
         Ok(state)
     }
 
+    pub fn start_new(root: &Path) -> CliResult<Self> {
+        let mut state = Self::load(root)?;
+        state.current_session_id = None;
+        state.persist(root)?;
+        Ok(state)
+    }
+
     pub fn record(&mut self, root: &Path, session_id: Uuid) -> CliResult<()> {
         self.current_session_id = Some(session_id);
         self.recent_session_ids.retain(|value| *value != session_id);
         self.recent_session_ids.insert(0, session_id);
         self.recent_session_ids.truncate(100);
-        let path = state_path(root);
-        fs::create_dir_all(path.parent().unwrap_or(root))?;
-        let temporary = path.with_extension("json.tmp");
-        fs::write(&temporary, serde_json::to_vec_pretty(self)?)?;
-        fs::rename(temporary, path)?;
-        Ok(())
+        self.persist(root)
     }
 
     pub fn resolve(&self, explicit: Option<Uuid>) -> CliResult<Uuid> {
         explicit
             .or(self.current_session_id)
             .ok_or(CliError::NoSession)
+    }
+
+    fn persist(&self, root: &Path) -> CliResult<()> {
+        let path = state_path(root);
+        fs::create_dir_all(path.parent().unwrap_or(root))?;
+        let temporary = path.with_extension("json.tmp");
+        fs::write(&temporary, serde_json::to_vec_pretty(self)?)?;
+        fs::rename(temporary, path)?;
+        Ok(())
     }
 }
 

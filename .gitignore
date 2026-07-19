@@ -71,6 +71,10 @@ dist/
 ./.claude
 .agent/
 .core-agent-live-e2e
+core-agent-config.yaml
+core-agent-config.yml
+core-agent-config.json
+*.dpapi
 
 # code-graph
 .codegraph

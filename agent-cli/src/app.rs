@@ -47,6 +47,13 @@ impl<C: AgentClient + ?Sized, R: Renderer> CliApplication<C, R> {
         self.submit(goal.into(), state.current_session_id).await
     }
 
+    pub fn begin_chat(&self) -> CliResult<()> {
+        if !self.config.session.resume_last {
+            LocalSessionState::start_new(&self.root)?;
+        }
+        Ok(())
+    }
+
     pub async fn resume(&self, explicit: Option<Uuid>) -> CliResult<CommandOutput> {
         let mut state = LocalSessionState::load(&self.root)?;
         let session_id = state.resolve(explicit)?;
@@ -93,7 +100,7 @@ impl<C: AgentClient + ?Sized, R: Renderer> CliApplication<C, R> {
 
     pub fn config(&self) -> CliResult<CommandOutput> {
         Ok(CommandOutput {
-            lines: serde_yaml::to_string(&self.config)?
+            lines: serde_yaml::to_string(&self.config.redacted())?
                 .lines()
                 .map(str::to_owned)
                 .collect(),

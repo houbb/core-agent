@@ -10,6 +10,7 @@ pub(crate) async fn runtime_request(
     state: tauri::State<'_, DesktopState>,
     request: RuntimeRequest,
 ) -> DesktopResult<Value> {
+    let _operation = state.runtime_operation.lock().await;
     validate_request(&request)?;
     let path = request
         .path
@@ -17,10 +18,11 @@ pub(crate) async fn runtime_request(
         .next()
         .unwrap_or(&request.path)
         .to_owned();
-    let runtimes = state.agent.runtimes();
+    let agent = state.agent().await;
+    let runtimes = agent.runtimes();
 
     if request.method == "POST" && path == "/api/agent" {
-        return create_agent(&state.agent, request.body).await;
+        return create_agent(&agent, request.body).await;
     }
     if request.method != "GET" {
         return Err(DesktopError::NotFound(format!("{} {path}", request.method)));
@@ -41,7 +43,7 @@ pub(crate) async fn runtime_request(
         "/api/prompt" | "/api/knowledge" | "/api/trace" => empty_items(),
         "/api/memory" => items(runtimes.memory.list("project").await.map_err(agent_error)?),
         "/api/capability" => {
-            let tools = state.agent.tools().list().await.map_err(agent_error)?;
+            let tools = agent.tools().list().await.map_err(agent_error)?;
             items(
                 tools
                     .into_iter()
@@ -58,12 +60,7 @@ pub(crate) async fn runtime_request(
             )
         }
         "/api/model" => {
-            let profiles = state
-                .agent
-                .models()
-                .list_profiles()
-                .await
-                .map_err(agent_error)?;
+            let profiles = agent.models().list_profiles().await.map_err(agent_error)?;
             items(
                 profiles
                     .into_iter()

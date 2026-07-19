@@ -1,0 +1,20 @@
+# Copy to ~/core-agent/core-agent-config.yaml and replace the placeholder.
+version: 1
+model:
+  provider: deepseek
+  endpoint: https://api.deepseek.com
+  name: deepseek-v4-flash
+  profile: default
+  apiKey: "<your-api-key>"
+permissions:
+  mode: risk-based
+memory:
+  enabled: true
+session:
+  resumeLast: false
+context:
+  maxMentions: 16
+  maxFiles: 128
+  maxFileBytes: 262144
+  maxTotalBytes: 1048576
+  maxDirectoryDepth: 8

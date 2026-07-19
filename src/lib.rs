@@ -15,13 +15,30 @@
 //! + Phase 12 (Extension Runtime)
 //! + Phase 13 (Platform Runtime)
 
+mod checkpoint;
 mod enterprise;
+mod interaction;
 
 pub use enterprise::{
     EnterpriseAgent, EnterpriseAgentConfig, EnterpriseAgentError, EnterpriseAgentEvent,
     EnterpriseAgentResult, EnterpriseApprovalDecision, EnterpriseApprovalHandler,
-    EnterpriseApprovalRequest, EnterpriseModelConfig, EnterpriseRun, EnterpriseRuntimes,
-    EnterpriseSessionStatus, PermissionMode,
+    EnterpriseApprovalRequest, EnterpriseCommandAction, EnterpriseCommandOutcome,
+    EnterpriseModelConfig, EnterpriseRun, EnterpriseRuntimes, EnterpriseSessionStatus,
+    PermissionMode,
+};
+pub use interaction::{
+    ContextCandidateIndex, ContextCandidateSearch, ContextMentionLimits, ContextMentionResolver,
+    InteractionCommandDefinition, InteractionCommandInvocation, InteractionCommandRegistry,
+    InteractionCommandRoute, InteractionEntryAction, InteractionEntryOutcome, InteractionError,
+    InteractionResult, ResolvedContextItem, ResolvedContextMentions,
+};
+
+pub use core_agent_config as config_runtime;
+pub use core_agent_config::{
+    project_storage_key, standard_config_manager, AgentConfig, ConfigManager, ConfigManagerBuilder,
+    ConfigProvider, ConfigRequest, ConfigSourceInfo, EnvironmentConfigProvider,
+    EnvironmentSecretResolver, ProjectFileConfigProvider, ResolvedConfig, SecretResolver,
+    UserFileConfigProvider,
 };
 
 pub use core_agent_agent as agent_runtime;

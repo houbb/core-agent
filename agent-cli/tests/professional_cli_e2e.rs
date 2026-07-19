@@ -101,7 +101,10 @@ async fn profile_project_review_and_private_history_form_one_flow() {
             .unwrap(),
         vec!["Profile: architect"]
     );
-    assert!(application.execute_line("/project").await.unwrap()[0].contains("architect"));
+    assert_eq!(
+        application.execute_line("/project").await.unwrap()[0],
+        "project completed"
+    );
     assert_eq!(
         application.execute_line("/review").await.unwrap()[0],
         "review completed"
@@ -111,15 +114,36 @@ async fn profile_project_review_and_private_history_form_one_flow() {
         ProfileState::load(directory.path()).unwrap().active,
         "architect"
     );
-    assert_eq!(client.indexed.lock().unwrap().len(), 1);
+    assert_eq!(client.indexed.lock().unwrap().len(), 0);
     let requests = client.requests.lock().unwrap();
-    assert_eq!(requests.len(), 1);
+    assert_eq!(requests.len(), 2);
     assert_eq!(requests[0].profile, "architect");
+    assert_eq!(requests[0].invocation.name, "project");
+    assert_eq!(requests[1].invocation.name, "review");
     drop(requests);
     assert_eq!(
         TerminalHistory::load(directory.path()).unwrap().commands,
         vec!["/profile architect", "/project", "/review"]
     );
+}
+
+#[tokio::test]
+async fn shared_entry_commands_do_not_call_the_agent_client() {
+    let directory = tempdir().unwrap();
+    let client = Arc::new(MockProfessionalClient::default());
+    let application = ProfessionalApplication::new(directory.path(), client.clone());
+
+    assert!(application
+        .execute_line("/help")
+        .await
+        .unwrap()
+        .iter()
+        .any(|line| line.contains("/new")));
+    assert_eq!(
+        application.execute_line("/new").await.unwrap(),
+        vec!["Started a new chat session."]
+    );
+    assert!(client.requests.lock().unwrap().is_empty());
 }
 
 #[test]

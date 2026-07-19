@@ -21,11 +21,16 @@ const emptySnapshot = (): WorkspaceSnapshot => ({
   profile: "Coder",
   model: "Unavailable",
   projectTree: [],
+  commands: [],
   changes: [],
   trace: [],
   memory: [],
   tools: [],
   sessions: [],
+  resumeSession: false,
+  permissionMode: "risk-based",
+  configSources: [],
+  effectiveConfig: {},
 });
 
 export function createDesktopController(api: DesktopApi) {
@@ -46,7 +51,9 @@ export function createDesktopController(api: DesktopApi) {
     state.error = "";
     try {
       state.snapshot = await api.loadWorkspace(state.currentSessionId);
-      state.currentSessionId ??= state.snapshot.sessions[0]?.sessionId;
+      if (state.snapshot.resumeSession) {
+        state.currentSessionId ??= state.snapshot.sessions[0]?.sessionId;
+      }
       state.connected = true;
     } catch (error) {
       state.connected = false;
@@ -65,15 +72,57 @@ export function createDesktopController(api: DesktopApi) {
     state.conversation.push({ id: crypto.randomUUID(), role: "user", content: text });
     try {
       const submission = await api.sendMessage(text, state.currentSessionId);
-      state.currentSessionId = submission.sessionId;
-      closeEvents?.();
-      closeEvents = api.subscribe(submission.sessionId, appendTrace);
+      if (submission.action === "new-session") {
+        closeEvents?.();
+        closeEvents = undefined;
+        state.currentSessionId = undefined;
+        state.snapshot.trace = [];
+        state.conversation = [];
+      } else if (submission.action === "clear-view") {
+        state.conversation = [];
+      }
+      if (submission.response) {
+        state.conversation.push({
+          id: crypto.randomUUID(),
+          role: submission.action === "none" ? "agent" : "system",
+          content: submission.response,
+        });
+      }
+      if (submission.sessionId) {
+        state.currentSessionId = submission.sessionId;
+        closeEvents?.();
+        closeEvents = api.subscribe(submission.sessionId, appendTrace);
+      } else if (!submission.response) {
+        throw new Error("Agent did not return a session or command response");
+      }
       state.connected = true;
     } catch (error) {
       state.error = error instanceof Error ? error.message : "Unable to send message";
     } finally {
       state.sending = false;
     }
+  }
+
+  async function openWorkspace(path: string) {
+    const wasConnected = state.connected;
+    state.loading = true;
+    state.error = "";
+    try {
+      await api.openWorkspace(path);
+      closeEvents?.();
+      closeEvents = undefined;
+      state.currentSessionId = undefined;
+      state.conversation = [];
+      state.snapshot = emptySnapshot();
+      state.connected = true;
+    } catch (error) {
+      state.connected = wasConnected;
+      state.error = error instanceof Error ? error.message : "Unable to open workspace";
+      return;
+    } finally {
+      state.loading = false;
+    }
+    await load();
   }
 
   function appendTrace(event: TraceStep) {
@@ -97,5 +146,5 @@ export function createDesktopController(api: DesktopApi) {
     closeEvents?.();
   }
 
-  return { state, load, send, appendTrace, selectWorkspace, dispose };
+  return { state, load, openWorkspace, send, appendTrace, selectWorkspace, dispose };
 }

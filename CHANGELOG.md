@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+### P032: Unified Desktop Workspace Experience
+
+- Desktop 新增系统目录选择器与进程内工作区切换：按新目录重新解析有效配置、隔离 Runtime 数据、清空旧 UI session，并默认拒绝旧 Runtime pending approval；不启动额外 Runtime 子进程。
+- Console 新增共享 `/` 命令候选和 `@` 文件/文件夹模糊候选；至少 3 个字符才查询核心预索引，`↑/↓` 选择、`Tab/Enter` 只补全、Shift+Enter 换行，项目树可直接 `Add @`。
+- 用户原始消息继续在发送前显示，并为用户/Agent 消息增加显式复制；候选逻辑提取为可断言纯函数，Desktop 不实现第二套磁盘扫描或命令语义。
+
+### P031: Read-only Plan and Durable File Checkpoints
+
+- `/plan`、`/review`、`/explain`、`/commit`、`/pr` 增加 Runtime 强制只读边界：工具声明移除写能力，执行前再次拒绝写调用及非白名单命令。
+- `write_file` 新增 session/request 级持久化 Checkpoint 和崩溃可恢复 pending journal；同轮同文件保留首个 before 与最终 after，历史/文件数/体积全部有界。
+- 核心注册 `/undo`、`/redo`，Terminal/Desktop 复用同一路由；整组文件恢复执行 SHA-256 CAS，手工修改、越界、符号链接和损坏快照均 fail-closed，不触碰 Git index，也不声称回退 shell/网络副作用。
+
+### P030: Full-screen Terminal Experience
+
+- 将 `agent chat` 从裸 `stdin` 行循环升级为 Ratatui 全屏终端应用：新增 Core Agent ASCII 品牌区、自适应 Conversation、Message 输入框、状态栏、内存输入历史、滚动和忙碌反馈；TTY 使用视觉 TUI，脚本/非 TTY/`--no-color` 保持纯文本兼容。
+- `/` 命令面板直接读取核心 `InteractionCommandRegistry`；`@` 使用启动时预建的最多 20,000 文件 git-aware 安全索引，至少 3 字符才在内存模糊过滤文件/文件夹，最终内容仍由核心 resolver 解析。
+- 新增 channel/oneshot Terminal 审批适配器，模型后台运行时在 TUI 内展示工具、风险、原因与参数，允许一次或默认拒绝，继续复用 `EnterpriseApprovalHandler` 和统一权限引擎。
+- 新增 UTF-8 输入编辑、选择候选后继续输入、已发送原文展示、最近 Agent/错误消息复制、大/小终端 resize 和审批 modal 断言测试；退出采用 RAII 恢复 raw mode、光标和 alternate screen。
+
+### P029: Extensible Global Configuration and Unified Interaction
+
+- 新增独立 `core-agent-config`：核心消费版本化强类型配置，`ConfigProvider`/`SecretResolver` 为稳定扩展接口；内置默认、用户 YAML/JSON、项目覆盖、环境变量与环境密钥引用只是可替换策略，优先级固定且可验证。
+- 默认发现 `~/core-agent/core-agent-config.yaml|yml|json`，模型与 API Key 配置一次即可用于任意项目；Terminal 不再要求 `agent init`，项目初始化只保存入口/工作区覆盖。配置冲突、超大、符号链接和错误密钥引用 fail-closed，所有输出与 Debug 脱敏。
+- 新增核心统一交互层：可注册 `/` 命令定义、解析、路由和 Agent Prompt 展开由 Terminal/Desktop 共享；`/help`、`/new`、`/clear`、`/sessions`、`/status`、`/tools`、`/config` 等零模型命令与 `/plan`、`/review`、`/test` 等 Agent 命令统一打通。
+- 新增共享 `@file`/`@folder` Context resolver：文件夹确定性展开，复用工作区越界/敏感路径策略，拒绝符号链接并限制 mention、文件数、目录深度、单文件和总字节；正文仅进入本轮 Context，Session 保留原始输入，事件只记录路径、大小与 SHA-256。
+- 新 chat 默认新 session，同一 chat 持续复用；Desktop 按规范化项目路径哈希隔离 Runtime 数据，读取同一全局配置并显示脱敏来源。新增配置策略合并、密钥脱敏、双入口命令/mention、项目隔离和真实 DeepSeek/Terminal 启动端到端验证。
+
 ### Unified Embedded Runtime Entry
 
 - 新增根组合入口 `EnterpriseAgent`，在单进程内统一构造并持有全部 Runtime；Session、Context、Model、Workspace 使用持久化存储，Kernel/Platform/Protocol 和其余领域模块由组合根连接。

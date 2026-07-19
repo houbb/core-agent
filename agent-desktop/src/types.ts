@@ -50,16 +50,42 @@ export interface ConversationItem {
   content: string;
 }
 
+export interface CommandSuggestion {
+  name: string;
+  usage: string;
+  summary: string;
+}
+
+export interface ContextCandidateSearch {
+  indexedFiles: number;
+  indexedDirectories: number;
+  source: string;
+  minimumQueryChars: number;
+  queryReady: boolean;
+  matches: string[];
+}
+
 export interface WorkspaceSnapshot {
   projectName: string;
   profile: string;
   model: string;
   projectTree: ProjectNode[];
+  commands: CommandSuggestion[];
   changes: ChangeItem[];
   trace: TraceStep[];
   memory: MemoryItem[];
   tools: ToolStatus[];
   sessions: SessionItem[];
+  resumeSession: boolean;
+  permissionMode: string;
+  configSources: Array<{ provider: string; priority: number; location?: string }>;
+  effectiveConfig: unknown;
+}
+
+export interface AgentSubmission {
+  sessionId?: string;
+  response?: string;
+  action: "none" | "new-session" | "clear-view" | "exit";
 }
 
 export interface ApprovalRequest {

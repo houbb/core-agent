@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "core-agent-config",
     "core-agent-session",
     "core-agent-context",
     "core-agent-model",
@@ -41,6 +42,7 @@ repository.workspace = true
 description = "Enterprise Agent Runtime — Agent Operating System"
 
 [dependencies]
+core-agent-config = { path = "core-agent-config" }
 core-agent-session = { path = "core-agent-session" }
 core-agent-context = { path = "core-agent-context" }
 core-agent-model = { path = "core-agent-model" }
@@ -69,7 +71,7 @@ serde_json = "1"
 sha2 = "0.10"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "process", "sync", "time"] }
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "serde"] }
 
 [dev-dependencies]
 tempfile = "3"

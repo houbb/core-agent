@@ -2,8 +2,8 @@ use std::io::{self, BufRead, IsTerminal};
 use std::sync::Arc;
 
 use agent_cli::{
-    Cli, CliApplication, CliCommand, CliConfig, EmbeddedAgentClient, HttpAgentClient,
-    ProfessionalApplication, TerminalAgentClient, TerminalRenderer,
+    run_tui, tui_approval_channel, Cli, CliApplication, CliCommand, CliConfig, EmbeddedAgentClient,
+    HttpAgentClient, ProfessionalApplication, TerminalAgentClient, TerminalRenderer, TuiOptions,
 };
 use clap::Parser;
 
@@ -23,19 +23,44 @@ async fn run() -> agent_cli::CliResult<()> {
         return Ok(());
     }
 
-    let config = CliConfig::load(&cli.workspace)?;
+    let config = CliConfig::load(&cli.workspace).await?;
+    let use_tui = matches!(&cli.command, CliCommand::Chat)
+        && !cli.no_color
+        && io::stdin().is_terminal()
+        && io::stdout().is_terminal();
+    let (tui_approval, mut tui_receiver) = if use_tui {
+        let (approval, receiver) = tui_approval_channel();
+        (Some(approval), Some(receiver))
+    } else {
+        (None, None)
+    };
     let client: Arc<dyn TerminalAgentClient> = if config.server.mode == "remote" {
         let url = config.server.url.as_deref().ok_or_else(|| {
             agent_cli::CliError::Configuration("remote mode requires server.url".into())
         })?;
         Arc::new(HttpAgentClient::new(url)?)
     } else {
-        Arc::new(EmbeddedAgentClient::open(&cli.workspace, &config).await?)
+        Arc::new(if let Some(approval) = tui_approval {
+            EmbeddedAgentClient::open_with_approval(&cli.workspace, &config, approval).await?
+        } else {
+            EmbeddedAgentClient::open(&cli.workspace, &config).await?
+        })
     };
     let color = !cli.no_color && io::stdout().is_terminal();
-    let professional = ProfessionalApplication::new(&cli.workspace, client.clone());
-    let application =
-        CliApplication::new(&cli.workspace, config, client, TerminalRenderer::new(color));
+    let tui_options = TuiOptions::new(
+        &cli.workspace,
+        cli.workspace
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("workspace"),
+        config.model.name.clone(),
+        config.permissions.mode.clone(),
+    );
+    let professional: Arc<ProfessionalApplication<dyn TerminalAgentClient>> =
+        Arc::new(ProfessionalApplication::new(&cli.workspace, client.clone()));
+    let application: Arc<CliApplication<dyn TerminalAgentClient, TerminalRenderer>> = Arc::new(
+        CliApplication::new(&cli.workspace, config, client, TerminalRenderer::new(color)),
+    );
     match cli.command {
         CliCommand::Init => unreachable!(),
         CliCommand::Run { goal } => print_output(application.run(goal).await?),
@@ -77,6 +102,19 @@ async fn run() -> agent_cli::CliResult<()> {
         CliCommand::Tools => print_lines(professional.execute_line("/tools").await?),
         CliCommand::Memory => print_lines(professional.execute_line("/memory").await?),
         CliCommand::Chat => {
+            application.begin_chat()?;
+            if use_tui {
+                run_tui(
+                    tui_options,
+                    application,
+                    professional,
+                    tui_receiver
+                        .take()
+                        .expect("TUI approval receiver must be initialized"),
+                )
+                .await?;
+                return Ok(());
+            }
             print_lines(professional.execute_line("/project").await?);
             for line in application.header() {
                 println!("{line}");

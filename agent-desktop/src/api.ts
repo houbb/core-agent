@@ -7,6 +7,8 @@ import type {
   TraceStep,
   WorkspaceSnapshot,
   ApprovalRequest,
+  AgentSubmission,
+  ContextCandidateSearch,
 } from "./types";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -15,7 +17,9 @@ const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 
 export interface DesktopApi {
   loadWorkspace(sessionId?: string): Promise<WorkspaceSnapshot>;
-  sendMessage(message: string, sessionId?: string): Promise<{ sessionId: string }>;
+  openWorkspace(path: string): Promise<void>;
+  searchContext(query: string, limit?: number): Promise<ContextCandidateSearch>;
+  sendMessage(message: string, sessionId?: string): Promise<AgentSubmission>;
   subscribe(sessionId: string, onEvent: (event: TraceStep) => void): () => void;
 }
 
@@ -24,9 +28,17 @@ export class TauriDesktopApi implements DesktopApi {
     return invoke<WorkspaceSnapshot>("agent_load_workspace", { sessionId });
   }
 
-  async sendMessage(message: string, sessionId?: string): Promise<{ sessionId: string }> {
+  async openWorkspace(path: string): Promise<void> {
+    return invoke<void>("agent_open_workspace", { path });
+  }
+
+  async searchContext(query: string, limit = 100): Promise<ContextCandidateSearch> {
+    return invoke<ContextCandidateSearch>("agent_context_candidates", { query, limit });
+  }
+
+  async sendMessage(message: string, sessionId?: string): Promise<AgentSubmission> {
     validateMessage(message);
-    return invoke<{ sessionId: string }>("agent_send_message", {
+    return invoke<AgentSubmission>("agent_send_message", {
       request: { message, sessionId },
     });
   }
@@ -81,21 +93,48 @@ export class HttpDesktopApi implements DesktopApi {
       profile: status.profile ?? "Coder",
       model: status.model ?? "Unavailable",
       projectTree: project.nodes ?? [],
+      commands: [],
       changes: value(1, []),
       trace: value(2, []),
       memory: value(3, []),
       tools: value(4, []),
       sessions: value(5, []),
+      resumeSession: false,
+      permissionMode: "risk-based",
+      configSources: [],
+      effectiveConfig: {},
     };
   }
 
-  async sendMessage(message: string, sessionId?: string): Promise<{ sessionId: string }> {
+  async openWorkspace(_path: string): Promise<void> {
+    throw new Error("Changing workspace is only available in the embedded desktop runtime.");
+  }
+
+  async sendMessage(message: string, sessionId?: string): Promise<AgentSubmission> {
     validateMessage(message);
-    return this.request("/api/chat", {
+    const submission = await this.request<{ sessionId?: string; response?: string; action?: AgentSubmission["action"] }>("/api/chat", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ sessionId, message }),
     });
+    return { ...submission, action: submission.action ?? "none" };
+  }
+
+  async searchContext(query: string, limit = 100): Promise<ContextCandidateSearch> {
+    try {
+      return await this.get<ContextCandidateSearch>(
+        `/api/context/candidates?query=${encodeURIComponent(query)}&limit=${Math.min(limit, 500)}`,
+      );
+    } catch {
+      return {
+        indexedFiles: 0,
+        indexedDirectories: 0,
+        source: "remote",
+        minimumQueryChars: 3,
+        queryReady: [...query].length >= 3,
+        matches: [],
+      };
+    }
   }
 
   subscribe(sessionId: string, onEvent: (event: TraceStep) => void): () => void {

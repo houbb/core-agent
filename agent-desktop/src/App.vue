@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { ArrowUp, Circle, RefreshCw, Search } from "lucide-vue-next";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { ArrowUp, Circle, Copy, FilePlus2, FolderOpen, RefreshCw, Search } from "lucide-vue-next";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { TauriDesktopApi } from "./api";
 import { loadPreferences, savePreference } from "./bridge";
 import { createDesktopController, type WorkspaceKind } from "./controller";
@@ -15,10 +16,23 @@ import ApprovalDialog from "./components/ApprovalDialog.vue";
 import EnterpriseWorkspace from "./components/EnterpriseWorkspace.vue";
 import EcosystemWorkspace from "./components/EcosystemWorkspace.vue";
 import type { ApprovalRequest, ProjectNode } from "./types";
+import {
+  applyPromptCompletion,
+  commandCompletions,
+  contextCompletions,
+  mentionQueryAtCursor,
+  type PromptCompletion,
+} from "./prompt-completion";
 
 const api = new TauriDesktopApi();
 const controller = createDesktopController(api);
 const prompt = ref("");
+const promptInput = ref<HTMLTextAreaElement>();
+const promptCompletions = ref<PromptCompletion[]>([]);
+const promptCompletionHint = ref("");
+const selectedCompletion = ref(0);
+const copiedMessageId = ref("");
+const openingWorkspace = ref(false);
 const selectedPath = ref("");
 const theme = ref("obsidian-gold");
 const bottomTab = ref<"tools" | "log">("tools");
@@ -26,6 +40,8 @@ const activeTitle = computed(() => controller.state.activeWorkspace[0].toUpperCa
 const pendingApproval = ref<ApprovalRequest>();
 const decidingApproval = ref(false);
 let closeApprovals: (() => void) | undefined;
+let completionTimer: ReturnType<typeof setTimeout> | undefined;
+let completionRequest = 0;
 
 onMounted(async () => {
   const preferences = await loadPreferences();
@@ -40,9 +56,78 @@ onMounted(async () => {
   await controller.load();
 });
 onBeforeUnmount(() => {
+  if (completionTimer) clearTimeout(completionTimer);
   closeApprovals?.();
   controller.dispose();
 });
+
+watch(prompt, refreshPromptCompletions);
+
+function refreshPromptCompletions(value: string) {
+  completionRequest += 1;
+  const request = completionRequest;
+  if (completionTimer) clearTimeout(completionTimer);
+  promptCompletions.value = commandCompletions(value, controller.state.snapshot.commands);
+  promptCompletionHint.value = "";
+  selectedCompletion.value = 0;
+  if (promptCompletions.value.length) return;
+
+  const mention = mentionQueryAtCursor(value);
+  if (!mention) return;
+  if ([...mention.query].length < 3) {
+    promptCompletionHint.value = "Type at least 3 characters after @ to search the workspace index.";
+    return;
+  }
+  promptCompletionHint.value = "Searching the workspace index…";
+  completionTimer = setTimeout(async () => {
+    try {
+      const result = await api.searchContext(mention.query, 100);
+      if (request !== completionRequest || prompt.value !== value) return;
+      promptCompletions.value = contextCompletions(value, result.matches);
+      const indexed = result.indexedFiles + result.indexedDirectories;
+      promptCompletionHint.value = result.matches.length
+        ? `${result.matches.length} ranked matches from ${indexed} indexed files/folders (${result.source}).`
+        : `No match in ${indexed} indexed files/folders.`;
+    } catch (error) {
+      if (request === completionRequest) {
+        promptCompletionHint.value = error instanceof Error ? error.message : "Unable to search workspace files.";
+      }
+    }
+  }, 80);
+}
+
+function applyCompletion(index = selectedCompletion.value) {
+  const completion = promptCompletions.value[index];
+  if (!completion) return;
+  prompt.value = applyPromptCompletion(prompt.value, completion);
+  promptCompletions.value = [];
+  promptCompletionHint.value = "";
+  void nextTick(() => promptInput.value?.focus());
+}
+
+function handlePromptKeydown(event: KeyboardEvent) {
+  if (event.isComposing) return;
+  if (promptCompletions.value.length && event.key === "ArrowDown") {
+    event.preventDefault();
+    selectedCompletion.value = (selectedCompletion.value + 1) % promptCompletions.value.length;
+    return;
+  }
+  if (promptCompletions.value.length && event.key === "ArrowUp") {
+    event.preventDefault();
+    selectedCompletion.value =
+      (selectedCompletion.value + promptCompletions.value.length - 1) % promptCompletions.value.length;
+    return;
+  }
+  if (promptCompletions.value.length && (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey))) {
+    event.preventDefault();
+    applyCompletion();
+    return;
+  }
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    void send();
+  }
+}
 
 async function send() {
   const value = prompt.value;
@@ -52,6 +137,38 @@ async function send() {
 
 function selectNode(node: ProjectNode) {
   selectedPath.value = node.path;
+}
+
+function addSelectedContext() {
+  if (!selectedPath.value) return;
+  const replacement = selectedPath.value.includes(" ") ? `@"${selectedPath.value}" ` : `@${selectedPath.value} `;
+  prompt.value = `${prompt.value}${prompt.value && !prompt.value.endsWith(" ") ? " " : ""}${replacement}`;
+  void nextTick(() => promptInput.value?.focus());
+}
+
+async function copyMessage(id: string, content: string) {
+  try {
+    await navigator.clipboard.writeText(content);
+    copiedMessageId.value = id;
+    setTimeout(() => {
+      if (copiedMessageId.value === id) copiedMessageId.value = "";
+    }, 1_500);
+  } catch {
+    controller.state.error = "Unable to copy this message to the clipboard.";
+  }
+}
+
+async function chooseWorkspace() {
+  if (openingWorkspace.value) return;
+  openingWorkspace.value = true;
+  try {
+    const selected = await openDialog({ directory: true, multiple: false, title: "Open Agent Workspace" });
+    if (typeof selected === "string") await controller.openWorkspace(selected);
+  } catch (error) {
+    controller.state.error = error instanceof Error ? error.message : "Unable to choose workspace.";
+  } finally {
+    openingWorkspace.value = false;
+  }
 }
 
 async function changeTheme() {
@@ -82,9 +199,12 @@ async function decideApproval(decision: "ALLOW_ONCE" | "DENY") {
     <SidebarNav :active="controller.state.activeWorkspace" @select="selectWorkspace" />
     <section class="workspace-shell">
       <header class="topbar">
-        <div>
+        <div class="project-heading">
           <span class="eyebrow">{{ activeTitle }} Workspace</span>
           <h1>{{ controller.state.snapshot.projectName }}</h1>
+          <button class="button" :disabled="openingWorkspace || controller.state.sending" @click="chooseWorkspace">
+            <FolderOpen :size="13" /> {{ openingWorkspace ? "Opening…" : "Open folder" }}
+          </button>
         </div>
         <label class="search-box">
           <Search :size="15" />
@@ -117,7 +237,12 @@ async function decideApproval(decision: "ALLOW_ONCE" | "DENY") {
             @select="selectNode"
           />
           <EmptyState v-else title="No project context" detail="Connect the Agent API to load the project tree." />
-          <div v-if="selectedPath" class="selection-context">Context: {{ selectedPath }}</div>
+          <div v-if="selectedPath" class="selection-context">
+            <span>Context: {{ selectedPath }}</span>
+            <button class="button button-emphasis" type="button" @click="addSelectedContext">
+              <FilePlus2 :size="13" /> Add @
+            </button>
+          </div>
         </PanelShell>
 
         <PanelShell title="Agent Console" :state="controller.state.sending ? 'Running' : 'Ready'">
@@ -128,12 +253,37 @@ async function decideApproval(decision: "ALLOW_ONCE" | "DENY") {
               <p>Project context, execution trace and changes stay visible while the task runs.</p>
             </div>
             <article v-for="item in controller.state.conversation" :key="item.id" class="message" :class="item.role">
-              <span>{{ item.role }}</span>
+              <header class="message-header">
+                <span>{{ item.role }}</span>
+                <button type="button" :aria-label="`Copy ${item.role} message`" @click="copyMessage(item.id, item.content)">
+                  <Copy :size="12" /> {{ copiedMessageId === item.id ? "Copied" : "Copy" }}
+                </button>
+              </header>
               <p>{{ item.content }}</p>
             </article>
           </div>
           <form class="prompt-box" @submit.prevent="send">
-            <textarea v-model="prompt" rows="2" placeholder="Ask AgentOS to analyze, change, or verify this project…" />
+            <div v-if="promptCompletions.length || promptCompletionHint" class="prompt-completions" role="listbox">
+              <button
+                v-for="(completion, index) in promptCompletions"
+                :key="`${completion.kind}:${completion.label}`"
+                type="button"
+                role="option"
+                :aria-selected="index === selectedCompletion"
+                :class="{ selected: index === selectedCompletion }"
+                @mousedown.prevent="applyCompletion(index)"
+              >
+                <strong>{{ completion.label }}</strong><span>{{ completion.detail }}</span>
+              </button>
+              <small v-if="promptCompletionHint">{{ promptCompletionHint }}</small>
+            </div>
+            <textarea
+              ref="promptInput"
+              v-model="prompt"
+              rows="2"
+              placeholder="Ask AgentOS… Use @file or @folder for context, /help for commands"
+              @keydown="handlePromptKeydown"
+            />
             <button class="button button-primary send-button" :disabled="controller.state.sending || !prompt.trim()" aria-label="Send message">
               <ArrowUp :size="16" />
             </button>
@@ -206,6 +356,8 @@ async function decideApproval(decision: "ALLOW_ONCE" | "DENY") {
           <div class="settings-list">
             <div><span><strong>Theme</strong><small>Device-local appearance preference</small></span><button class="button button-emphasis" @click="changeTheme">{{ theme }}</button></div>
             <div><span><strong>Agent Runtime</strong><small>All modules run inside this desktop process</small></span><code>Embedded</code></div>
+            <div><span><strong>Permission Mode</strong><small>Shared effective configuration</small></span><span class="badge badge-accent">{{ controller.state.snapshot.permissionMode }}</span></div>
+            <div><span><strong>Configuration</strong><small>{{ controller.state.snapshot.configSources.length }} effective source(s)</small></span><code>{{ controller.state.snapshot.configSources.at(-1)?.provider ?? "builtin-defaults" }}</code></div>
             <div><span><strong>Layout</strong><small>Single-window workspace panels</small></span><span class="badge badge-neutral">Default</span></div>
           </div>
         </PanelShell>

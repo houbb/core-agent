@@ -8,6 +8,7 @@ use agent_cli::{
 };
 use async_trait::async_trait;
 use clap::Parser;
+use core_agent::{ConfigManager, UserFileConfigProvider};
 use futures_util::stream;
 use tempfile::tempdir;
 use uuid::Uuid;
@@ -117,6 +118,54 @@ fn permission_mode_configuration_is_fail_closed() {
     }
     config.permissions.mode = "unknown".into();
     assert!(config.validate().is_err());
+}
+
+#[tokio::test]
+async fn global_configuration_opens_an_uninitialized_project_and_redacts_the_key() {
+    let user = tempdir().unwrap();
+    let workspace = tempdir().unwrap();
+    std::fs::write(
+        user.path().join("core-agent-config.yaml"),
+        "model:\n  apiKey: never-print-this-key\n  name: configured-model\npermissions:\n  mode: strict\n",
+    )
+    .unwrap();
+    let manager = ConfigManager::builder()
+        .provider(Arc::new(UserFileConfigProvider::new(user.path())))
+        .build()
+        .unwrap();
+
+    let config = CliConfig::resolve(workspace.path(), &manager)
+        .await
+        .unwrap();
+
+    assert_eq!(config.model.name, "configured-model");
+    assert_eq!(config.permissions.mode, "strict");
+    assert!(!workspace.path().join(".agent/config.yaml").exists());
+    assert!(!format!("{config:?}").contains("never-print-this-key"));
+    assert!(!config
+        .redacted()
+        .to_string()
+        .contains("never-print-this-key"));
+}
+
+#[test]
+fn a_new_chat_does_not_silently_reuse_a_previous_run_session() {
+    let directory = tempdir().unwrap();
+    let previous = Uuid::new_v4();
+    let mut state = LocalSessionState::default();
+    state.record(directory.path(), previous).unwrap();
+    let application = CliApplication::new(
+        directory.path(),
+        CliConfig::default(),
+        Arc::new(MockClient::new(Uuid::new_v4(), Vec::new())),
+        TerminalRenderer::new(false),
+    );
+
+    application.begin_chat().unwrap();
+
+    let state = LocalSessionState::load(directory.path()).unwrap();
+    assert_eq!(state.current_session_id, None);
+    assert_eq!(state.recent_session_ids, vec![previous]);
 }
 
 #[test]

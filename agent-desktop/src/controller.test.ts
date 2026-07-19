@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDesktopController } from "./controller";
 import type { DesktopApi } from "./api";
-import type { TraceStep, WorkspaceSnapshot } from "./types";
+import type { AgentSubmission, TraceStep, WorkspaceSnapshot } from "./types";
 
 function snapshot(): WorkspaceSnapshot {
   return {
@@ -9,19 +9,36 @@ function snapshot(): WorkspaceSnapshot {
     profile: "Architect",
     model: "Local",
     projectTree: [],
+    commands: [{ name: "plan", usage: "/plan <request>", summary: "Create a plan" }],
     changes: [],
     trace: [],
     memory: [],
     tools: [],
     sessions: [{ sessionId: "session-1", title: "Task", state: "RUNNING", updatedAt: "now" }],
+    resumeSession: true,
+    permissionMode: "risk-based",
+    configSources: [],
+    effectiveConfig: {},
   };
 }
 
 class FakeApi implements DesktopApi {
   listener?: (event: TraceStep) => void;
   closed = false;
-  sendMessage = vi.fn(async () => ({ sessionId: "session-1" }));
+  sendMessage = vi.fn(async (): Promise<AgentSubmission> => ({
+    sessionId: "session-1",
+    action: "none",
+  }));
   loadWorkspace = vi.fn(async () => snapshot());
+  openWorkspace = vi.fn(async () => undefined);
+  searchContext = vi.fn(async (query: string) => ({
+    indexedFiles: 1,
+    indexedDirectories: 0,
+    source: "test",
+    minimumQueryChars: 3,
+    queryReady: query.length >= 3,
+    matches: query.length >= 3 ? ["src/main.rs"] : [],
+  }));
   subscribe(_sessionId: string, onEvent: (event: TraceStep) => void) {
     this.listener = onEvent;
     return () => {
@@ -53,6 +70,20 @@ describe("desktop controller", () => {
     expect(api.closed).toBe(true);
   });
 
+  it("routes local slash commands through the backend without creating a model trace", async () => {
+    const api = new FakeApi();
+    api.sendMessage.mockResolvedValueOnce({
+      action: "new-session",
+      response: "Started a new chat session.",
+    });
+    const controller = createDesktopController(api);
+    await controller.load();
+    await controller.send("/new");
+    expect(controller.state.currentSessionId).toBeUndefined();
+    expect(controller.state.snapshot.trace).toEqual([]);
+    expect(controller.state.conversation.at(-1)?.role).toBe("system");
+  });
+
   it("isolates load failure as an offline workspace state", async () => {
     const api = new FakeApi();
     api.loadWorkspace.mockRejectedValueOnce(new Error("offline"));
@@ -61,6 +92,17 @@ describe("desktop controller", () => {
     expect(controller.state.connected).toBe(false);
     expect(controller.state.error).toBe("offline");
     expect(controller.state.snapshot.projectTree).toEqual([]);
+  });
+
+  it("switches the embedded runtime workspace and reloads a clean session", async () => {
+    const api = new FakeApi();
+    const controller = createDesktopController(api);
+    controller.state.currentSessionId = "session-old";
+    controller.state.conversation.push({ id: "message", role: "user", content: "old" });
+    await controller.openWorkspace("D:/workspace/new");
+    expect(api.openWorkspace).toHaveBeenCalledWith("D:/workspace/new");
+    expect(controller.state.conversation).toEqual([]);
+    expect(api.loadWorkspace).toHaveBeenLastCalledWith(undefined);
   });
 
   it("switches workspace kinds without mutating data", () => {

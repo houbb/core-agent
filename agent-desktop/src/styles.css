@@ -50,6 +50,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .nav-button.active { color: var(--accent-bright); border-color: var(--border-strong); background: var(--accent-bg); }
 
 .topbar { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(14rem, 1.1fr) minmax(0, 0.9fr); align-items: center; gap: 18px; min-height: 72px; padding: 12px 18px; border-block-end: 1px solid var(--border); background: rgba(12, 12, 13, 0.75); backdrop-filter: blur(18px); }
+.project-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2px 8px; }
+.project-heading .eyebrow { grid-column: 1 / -1; }
+.project-heading h1 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-heading .button { min-height: 26px; padding: 4px 8px; font-size: 10px; }
 .eyebrow { display: block; margin-block-end: 3px; color: var(--accent); font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
 h1, h2, h3, p { margin: 0; }
 h1 { overflow: hidden; color: var(--text); font-size: 17px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
@@ -98,11 +102,22 @@ h3 { font-size: 15px; font-weight: 680; }
 .welcome-copy p { color: var(--text-tertiary); font-size: 11px; }
 .message { max-width: 82%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-tertiary); }
 .message.user { align-self: flex-end; border-color: var(--border-strong); background: var(--accent-bg); }
-.message > span { color: var(--text-tertiary); font-size: 9px; text-transform: uppercase; }
+.message-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.message-header > span { color: var(--text-tertiary); font-size: 9px; text-transform: uppercase; }
+.message-header button { display: inline-flex; align-items: center; gap: 4px; padding: 2px 5px; border: 0; border-radius: 6px; background: transparent; color: var(--text-tertiary); font-size: 9px; cursor: pointer; }
+.message-header button:hover { background: var(--bg-secondary); color: var(--text); }
 .message p { margin-block-start: 4px; color: var(--text); font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
-.prompt-box { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin: 8px; padding: 8px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface-raised); }
+.prompt-box { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin: 8px; padding: 8px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface-raised); }
 .prompt-box textarea { resize: none; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 12px; line-height: 1.45; }
 .send-button { align-self: end; min-height: 32px; min-width: 32px; padding: 6px; border-radius: 9px; }
+.prompt-completions { position: absolute; z-index: 20; inset-inline: 0; bottom: calc(100% + 6px); display: grid; max-height: min(320px, 45vh); overflow: auto; padding: 6px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface-raised); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35); }
+.prompt-completions button { display: grid; grid-template-columns: minmax(9rem, 0.45fr) minmax(0, 1fr); gap: 12px; width: 100%; padding: 8px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--text); text-align: start; cursor: pointer; }
+.prompt-completions button.selected, .prompt-completions button:hover { background: var(--accent-bg); }
+.prompt-completions button strong { overflow: hidden; color: var(--accent-bright); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.prompt-completions button span { overflow: hidden; color: var(--text-secondary); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.prompt-completions small { padding: 6px 10px; color: var(--text-tertiary); font-size: 10px; }
+.selection-context { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px; }
+.selection-context > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .trace-list { margin: 0; padding: 8px 10px; list-style: none; }
 .trace-step { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 9px; padding: 8px 0; }

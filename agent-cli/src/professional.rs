@@ -1,13 +1,14 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::config::agent_directory;
-use crate::{CliError, CliResult};
+use crate::{CliError, CliResult, LocalSessionState};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -133,198 +134,85 @@ pub struct CommandDefinition {
     pub maximum_arguments: usize,
 }
 
-impl CommandDefinition {
-    fn validate(&self) -> CliResult<()> {
-        if self.name.is_empty()
-            || self.name.len() > 64
-            || !self
-                .name
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte == b'-')
-            || self.summary.trim().is_empty()
-            || self.summary.len() > 256
-            || self.usage.len() > 256
-            || self.maximum_arguments > 32
-            || self.minimum_arguments > self.maximum_arguments
-        {
-            return Err(CliError::InvalidArgument(
-                "command definition is invalid".into(),
-            ));
-        }
-        Ok(())
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandInvocation {
     pub name: String,
     pub arguments: Vec<String>,
+    #[serde(skip, default = "agent_route")]
+    pub route: core_agent::InteractionCommandRoute,
 }
 
-#[derive(Default)]
 pub struct CommandRegistry {
-    commands: BTreeMap<String, CommandDefinition>,
+    commands: core_agent::InteractionCommandRegistry,
 }
 
 impl CommandRegistry {
     pub fn with_builtins() -> Self {
-        let mut registry = Self::default();
-        for (name, summary, usage, minimum, maximum) in [
-            (
-                "project",
-                "Index and describe the project",
-                "/project",
-                0,
-                0,
-            ),
-            (
-                "profile",
-                "Show or switch Agent profile",
-                "/profile [name]",
-                0,
-                1,
-            ),
-            ("tasks", "List active tasks", "/tasks", 0, 0),
-            (
-                "history",
-                "Inspect project history",
-                "/history [query]",
-                0,
-                1,
-            ),
-            (
-                "review",
-                "Review the current change",
-                "/review [target]",
-                0,
-                1,
-            ),
-            (
-                "plan",
-                "Create an implementation plan",
-                "/plan <goal>",
-                1,
-                32,
-            ),
-            (
-                "explain",
-                "Explain project code",
-                "/explain <target>",
-                1,
-                32,
-            ),
-            ("test", "Run or plan tests", "/test [target]", 0, 32),
-            ("fix", "Fix the current issue", "/fix [target]", 0, 32),
-            ("refactor", "Refactor a target", "/refactor <target>", 1, 32),
-            ("commit", "Generate a commit proposal", "/commit", 0, 0),
-            ("pr", "Generate a pull request proposal", "/pr", 0, 0),
-            ("config", "Show effective configuration", "/config", 0, 0),
-            ("status", "Show current status", "/status", 0, 0),
-            ("tools", "List available tools", "/tools", 0, 0),
-            ("memory", "Show project memory", "/memory", 0, 0),
-        ] {
-            registry
-                .register(CommandDefinition {
-                    name: name.into(),
-                    summary: summary.into(),
-                    usage: usage.into(),
-                    minimum_arguments: minimum,
-                    maximum_arguments: maximum,
-                })
-                .expect("built-in command must be valid");
+        Self {
+            commands: core_agent::InteractionCommandRegistry::with_builtins(),
         }
-        registry
     }
 
     pub fn register(&mut self, definition: CommandDefinition) -> CliResult<()> {
-        definition.validate()?;
-        if self.commands.contains_key(&definition.name) {
-            return Err(CliError::InvalidArgument(format!(
-                "command /{} is already registered",
-                definition.name
-            )));
-        }
-        self.commands.insert(definition.name.clone(), definition);
-        Ok(())
+        self.commands
+            .register(core_agent::InteractionCommandDefinition {
+                name: definition.name,
+                summary: definition.summary,
+                usage: definition.usage,
+                minimum_arguments: definition.minimum_arguments,
+                maximum_arguments: definition.maximum_arguments,
+                route: core_agent::InteractionCommandRoute::Agent,
+            })
+            .map_err(interaction_error)
     }
 
     pub fn parse(&self, line: &str) -> CliResult<CommandInvocation> {
-        if !line.starts_with('/') || line.len() > 64 * 1024 {
-            return Err(CliError::InvalidArgument(
-                "professional command must start with /".into(),
-            ));
-        }
-        let parts = tokenize(&line[1..])?;
-        let Some(name) = parts.first() else {
-            return Err(CliError::InvalidArgument("command name is required".into()));
-        };
-        let definition = self
-            .commands
-            .get(name)
-            .ok_or_else(|| CliError::InvalidArgument(format!("unknown command /{name}")))?;
-        let arguments = parts[1..].to_vec();
-        if arguments.len() < definition.minimum_arguments
-            || arguments.len() > definition.maximum_arguments
-        {
-            return Err(CliError::InvalidArgument(format!(
-                "usage: {}",
-                definition.usage
-            )));
-        }
+        let invocation = self.commands.parse(line).map_err(interaction_error)?;
         Ok(CommandInvocation {
-            name: name.clone(),
-            arguments,
+            name: invocation.name,
+            arguments: invocation.arguments,
+            route: invocation.route,
         })
     }
 
     pub fn complete(&self, prefix: &str) -> Vec<String> {
-        let prefix = prefix.trim_start_matches('/');
-        self.commands
-            .keys()
-            .filter(|name| name.starts_with(prefix))
-            .map(|name| format!("/{name}"))
-            .collect()
+        self.commands.complete(prefix)
     }
 
     pub fn help(&self) -> Vec<CommandDefinition> {
-        self.commands.values().cloned().collect()
+        self.commands
+            .help()
+            .into_iter()
+            .map(|definition| CommandDefinition {
+                name: definition.name,
+                summary: definition.summary,
+                usage: definition.usage,
+                minimum_arguments: definition.minimum_arguments,
+                maximum_arguments: definition.maximum_arguments,
+            })
+            .collect()
+    }
+
+    pub fn execute_entry(
+        &self,
+        invocation: &CommandInvocation,
+    ) -> CliResult<Option<core_agent::InteractionEntryOutcome>> {
+        self.commands
+            .execute_entry(&core_agent::InteractionCommandInvocation {
+                name: invocation.name.clone(),
+                arguments: invocation.arguments.clone(),
+                route: invocation.route,
+            })
+            .map_err(interaction_error)
     }
 }
 
-fn tokenize(value: &str) -> CliResult<Vec<String>> {
-    let mut output = Vec::new();
-    let mut current = String::new();
-    let mut quoted = false;
-    let mut escaped = false;
-    for character in value.chars() {
-        if escaped {
-            current.push(character);
-            escaped = false;
-        } else if character == '\\' && quoted {
-            escaped = true;
-        } else if character == '"' {
-            quoted = !quoted;
-        } else if character.is_whitespace() && !quoted {
-            if !current.is_empty() {
-                output.push(std::mem::take(&mut current));
-            }
-        } else if character.is_control() {
-            return Err(CliError::InvalidArgument(
-                "command contains control characters".into(),
-            ));
-        } else {
-            current.push(character);
-        }
-    }
-    if quoted || escaped {
-        return Err(CliError::InvalidArgument(
-            "command has an unterminated quote".into(),
-        ));
-    }
-    if !current.is_empty() {
-        output.push(current);
-    }
-    Ok(output)
+fn agent_route() -> core_agent::InteractionCommandRoute {
+    core_agent::InteractionCommandRoute::Agent
+}
+
+fn interaction_error(error: impl std::fmt::Display) -> CliError {
+    CliError::InvalidArgument(error.to_string())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -424,6 +312,7 @@ pub struct ProfessionalRequest {
     pub invocation: CommandInvocation,
     pub profile: String,
     pub project: ProjectSnapshot,
+    pub session_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -469,28 +358,39 @@ impl<C: ProfessionalAgentClient + ?Sized> ProfessionalApplication<C> {
 
     pub async fn execute_line(&self, line: &str) -> CliResult<Vec<String>> {
         let invocation = self.commands.parse(line)?;
-        if invocation.name == "profile" {
-            let profile = if let Some(value) = invocation.arguments.first() {
-                ProfileState::set(&self.root, value)?.active
-            } else {
-                ProfileState::load(&self.root)?.active
+        if let Some(entry) = self.commands.execute_entry(&invocation)? {
+            let response = match entry.action {
+                core_agent::InteractionEntryAction::NewSession => {
+                    LocalSessionState::start_new(&self.root)?;
+                    entry.response
+                }
+                core_agent::InteractionEntryAction::Profile(value) => {
+                    let profile = if let Some(value) = value {
+                        ProfileState::set(&self.root, value)?.active
+                    } else {
+                        ProfileState::load(&self.root)?.active
+                    };
+                    format!("Profile: {profile}")
+                }
+                _ => entry.response,
             };
-            self.record(line)?;
-            return Ok(vec![format!("Profile: {profile}")]);
+            if invocation.name != "help" && invocation.name != "exit" {
+                self.record(line)?;
+            }
+            return Ok(vec![response]);
         }
         let profile = ProfileState::load(&self.root)?.active;
         let project = ProjectSnapshot::scan(&self.root)?;
-        let response = if invocation.name == "project" {
-            self.client.index_project(project, &profile).await?
-        } else {
-            self.client
-                .execute_professional(ProfessionalRequest {
-                    invocation,
-                    profile,
-                    project,
-                })
-                .await?
-        };
+        let session_id = LocalSessionState::load(&self.root)?.current_session_id;
+        let response = self
+            .client
+            .execute_professional(ProfessionalRequest {
+                invocation,
+                profile,
+                project,
+                session_id,
+            })
+            .await?;
         self.record(line)?;
         let mut lines = vec![response.summary];
         lines.extend(response.items);

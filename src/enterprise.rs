@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use core_agent_agent::{AgentManager, RuntimeAgentCoordinator};
 use core_agent_collaboration::{CollaborationPlatformManager, TeamProject};
+use core_agent_config::AgentConfig;
 use core_agent_context::{
     BuildContextRequest, Context, ContextRuntime, SqliteContextSnapshotStore,
 };
@@ -47,6 +48,11 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
+use crate::{
+    checkpoint::CheckpointStore, ContextMentionLimits, ContextMentionResolver,
+    InteractionCommandRegistry, InteractionCommandRoute, InteractionEntryAction,
+};
+
 const DEFAULT_SYSTEM_PROMPT: &str =
     "You are core-agent, a careful enterprise assistant. Use available context and tools safely.";
 
@@ -58,6 +64,8 @@ pub struct EnterpriseAgentConfig {
     pub system_prompt: String,
     pub model: EnterpriseModelConfig,
     pub permission_mode: PermissionMode,
+    pub memory_enabled: bool,
+    pub context_mentions: ContextMentionLimits,
 }
 
 impl EnterpriseAgentConfig {
@@ -68,7 +76,35 @@ impl EnterpriseAgentConfig {
             system_prompt: DEFAULT_SYSTEM_PROMPT.into(),
             model: EnterpriseModelConfig::default(),
             permission_mode: PermissionMode::RiskBased,
+            memory_enabled: true,
+            context_mentions: ContextMentionLimits::default(),
         }
+    }
+
+    pub fn from_agent_config(
+        data_dir: impl Into<PathBuf>,
+        workspace: impl Into<PathBuf>,
+        config: &AgentConfig,
+    ) -> EnterpriseAgentResult<Self> {
+        let mut runtime = Self::new(data_dir, workspace);
+        runtime.model = EnterpriseModelConfig {
+            provider: config.model.provider.clone(),
+            endpoint: config.model.endpoint.clone(),
+            api_key: config.model.api_key.clone(),
+            model: config.model.name.clone(),
+            profile: config.model.profile.clone(),
+        };
+        runtime.permission_mode = PermissionMode::parse(&config.permissions.mode)?;
+        runtime.memory_enabled = config.memory.enabled;
+        runtime.context_mentions = ContextMentionLimits {
+            max_mentions: config.context.max_mentions,
+            max_files: config.context.max_files,
+            max_file_bytes: config.context.max_file_bytes,
+            max_total_bytes: config.context.max_total_bytes,
+            max_directory_depth: config.context.max_directory_depth,
+        };
+        runtime.validate()?;
+        Ok(runtime)
     }
 
     fn validate(&self) -> EnterpriseAgentResult<()> {
@@ -82,7 +118,10 @@ impl EnterpriseAgentConfig {
                 "workspace and data directory must not be empty".into(),
             ));
         }
-        self.model.validate()
+        self.model.validate()?;
+        ContextMentionResolver::new(self.context_mentions.clone())
+            .map_err(|error| EnterpriseAgentError::Configuration(error.to_string()))?;
+        Ok(())
     }
 }
 
@@ -219,6 +258,24 @@ pub struct EnterpriseRun {
     pub events: Vec<EnterpriseAgentEvent>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EnterpriseCommandAction {
+    None,
+    NewSession,
+    ClearView,
+    Exit,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnterpriseCommandOutcome {
+    pub response: String,
+    pub action: EnterpriseCommandAction,
+    pub session_id: Option<Uuid>,
+    pub data: Value,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnterpriseSessionStatus {
@@ -264,6 +321,7 @@ pub struct EnterpriseAgent {
     events: RwLock<HashMap<Uuid, Vec<EnterpriseAgentEvent>>>,
     operation_lock: Mutex<()>,
     approvals: Arc<EnterpriseApprovalLedger>,
+    checkpoints: Arc<CheckpointStore>,
 }
 
 #[derive(Default)]
@@ -378,7 +436,11 @@ impl EnterpriseAgent {
         );
         let approvals = Arc::new(EnterpriseApprovalLedger::default());
         let tools = Arc::new(ToolManager::builder().permission(approvals.clone()).build());
-        register_workspace_tools(&tools, &config.workspace).await?;
+        let checkpoints = Arc::new(
+            CheckpointStore::new(&config.workspace, config.data_dir.join("checkpoints"))
+                .map_err(checkpoint_error)?,
+        );
+        register_workspace_tools(&tools, &config.workspace, checkpoints.clone()).await?;
         let planning = Arc::new(PlanningManager::builder().build());
         let execution = Arc::new(
             ExecutionManager::builder()
@@ -519,6 +581,7 @@ impl EnterpriseAgent {
             events: RwLock::new(HashMap::new()),
             operation_lock: Mutex::new(()),
             approvals,
+            checkpoints,
         })
     }
 
@@ -544,6 +607,209 @@ impl EnterpriseAgent {
 
     pub fn model_name(&self) -> &str {
         &self.config.model.model
+    }
+
+    /// Executes all zero-model built-ins from the same registry used by every
+    /// product entry. Agent-routed commands return `None` and are handled by
+    /// `run_with_approval`, which applies the shared prompt expansion.
+    pub async fn execute_command(
+        &self,
+        line: &str,
+        session_id: Option<Uuid>,
+    ) -> EnterpriseAgentResult<Option<EnterpriseCommandOutcome>> {
+        let registry = InteractionCommandRegistry::with_builtins();
+        let invocation = registry
+            .parse(line)
+            .map_err(|error| EnterpriseAgentError::InvalidArgument(error.to_string()))?;
+        if invocation.route == InteractionCommandRoute::Agent {
+            return Ok(None);
+        }
+        let mut outcome = EnterpriseCommandOutcome {
+            response: String::new(),
+            action: EnterpriseCommandAction::None,
+            session_id,
+            data: json!({}),
+        };
+        if let Some(entry) = registry
+            .execute_entry(&invocation)
+            .map_err(|error| EnterpriseAgentError::InvalidArgument(error.to_string()))?
+        {
+            outcome.response = entry.response;
+            match entry.action {
+                InteractionEntryAction::None => {}
+                InteractionEntryAction::NewSession => {
+                    outcome.action = EnterpriseCommandAction::NewSession;
+                    outcome.session_id = None;
+                }
+                InteractionEntryAction::ClearView => {
+                    outcome.action = EnterpriseCommandAction::ClearView;
+                }
+                InteractionEntryAction::Exit => {
+                    outcome.action = EnterpriseCommandAction::Exit;
+                }
+                InteractionEntryAction::Profile(requested) => {
+                    outcome.response = if let Some(requested) = requested {
+                        format!(
+                            "Profile changes are configuration-backed; current profile is {} (requested {}).",
+                            self.config.model.profile, requested
+                        )
+                    } else {
+                        format!("Profile: {}", self.config.model.profile)
+                    };
+                }
+            }
+            return Ok(Some(outcome));
+        }
+        match invocation.name.as_str() {
+            "project" => {
+                let workspace = self.workspace_snapshot().await?;
+                outcome.response = format!(
+                    "Project {}: {} indexed resources",
+                    workspace.name,
+                    workspace.resources.len()
+                );
+                outcome.data = json!({
+                    "name": workspace.name,
+                    "uri": workspace.uri,
+                    "resources": workspace.resources.len(),
+                    "projects": workspace.projects.len(),
+                });
+            }
+            "tasks" | "sessions" | "history" => {
+                let mut sessions = self.list_sessions().await?;
+                if let Some(query) = invocation.arguments.first() {
+                    let query = query.to_ascii_lowercase();
+                    sessions.retain(|session| {
+                        session.title.to_ascii_lowercase().contains(&query)
+                            || session.session_id.to_string().contains(&query)
+                    });
+                }
+                outcome.response = if sessions.is_empty() {
+                    "No Agent sessions found.".into()
+                } else {
+                    sessions
+                        .iter()
+                        .map(|session| {
+                            format!(
+                                "{}  {}  {}",
+                                session.session_id, session.state, session.title
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                };
+                outcome.data = serde_json::to_value(sessions)?;
+            }
+            "status" => {
+                if let Some(session_id) = session_id {
+                    let status = self.status(session_id).await?;
+                    outcome.response = format!(
+                        "Session {} is {} on {}",
+                        status.session_id, status.state, status.model
+                    );
+                    outcome.data = serde_json::to_value(status)?;
+                } else {
+                    outcome.response = "No active session. Send a message or use /new.".into();
+                }
+            }
+            "tools" => {
+                let tools = self.tools.list().await.map_err(tool_error)?;
+                outcome.response = tools
+                    .iter()
+                    .map(|tool| format!("{} — {}", tool.key, tool.description))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                outcome.data = json!({"count": tools.len()});
+            }
+            "memory" => {
+                outcome.response = if self.config.memory_enabled {
+                    "Project memory is enabled in the embedded Runtime."
+                } else {
+                    "Project memory is disabled by configuration."
+                }
+                .into();
+                outcome.data = json!({"enabled": self.config.memory_enabled});
+            }
+            "config" => {
+                outcome.data = json!({
+                    "model": {
+                        "provider": self.config.model.provider,
+                        "endpoint": self.config.model.endpoint,
+                        "name": self.config.model.model,
+                        "profile": self.config.model.profile,
+                        "apiKeyConfigured": self.config.model.api_key.is_some(),
+                    },
+                    "permissionMode": permission_mode_name(self.config.permission_mode),
+                    "memory": {"enabled": self.config.memory_enabled},
+                    "context": {
+                        "maxMentions": self.config.context_mentions.max_mentions,
+                        "maxFiles": self.config.context_mentions.max_files,
+                        "maxFileBytes": self.config.context_mentions.max_file_bytes,
+                        "maxTotalBytes": self.config.context_mentions.max_total_bytes,
+                        "maxDirectoryDepth": self.config.context_mentions.max_directory_depth,
+                    }
+                });
+                outcome.response = serde_json::to_string_pretty(&outcome.data)?;
+            }
+            "undo" | "redo" => {
+                let Some(session_id) = session_id else {
+                    outcome.response = format!(
+                        "No active session. /{} only applies to Agent file checkpoints.",
+                        invocation.name
+                    );
+                    return Ok(Some(outcome));
+                };
+                let _operation = self.operation_lock.lock().await;
+                let checkpoint = if invocation.name == "undo" {
+                    self.checkpoints.undo(session_id)
+                } else {
+                    self.checkpoints.redo(session_id)
+                }
+                .map_err(checkpoint_error)?;
+                if let Some(checkpoint) = checkpoint {
+                    outcome.response = format!(
+                        "{} checkpoint {} across {} file(s).",
+                        if invocation.name == "undo" {
+                            "Undid"
+                        } else {
+                            "Redid"
+                        },
+                        checkpoint.checkpoint_id,
+                        checkpoint.files
+                    );
+                    outcome.data = json!({
+                        "checkpointId": checkpoint.checkpoint_id,
+                        "files": checkpoint.files,
+                        "operation": invocation.name,
+                    });
+                    self.events
+                        .write()
+                        .await
+                        .entry(session_id)
+                        .or_default()
+                        .push(EnterpriseAgentEvent {
+                            kind: if invocation.name == "undo" {
+                                "checkpoint_undone"
+                            } else {
+                                "checkpoint_redone"
+                            }
+                            .into(),
+                            message: outcome.response.clone(),
+                            data: outcome.data.clone(),
+                        });
+                } else {
+                    outcome.response =
+                        format!("No file checkpoint is available to {}.", invocation.name);
+                }
+            }
+            _ => {
+                return Err(EnterpriseAgentError::InvalidArgument(format!(
+                    "unsupported zero-model command /{}",
+                    invocation.name
+                )))
+            }
+        }
+        Ok(Some(outcome))
     }
 
     pub async fn workspace_snapshot(&self) -> EnterpriseAgentResult<Workspace> {
@@ -577,9 +843,50 @@ impl EnterpriseAgent {
     ) -> EnterpriseAgentResult<EnterpriseRun> {
         let message = message.into();
         validate_message(&message)?;
+        let (command_context, read_only) = if message.starts_with('/') {
+            let invocation = InteractionCommandRegistry::with_builtins()
+                .parse(&message)
+                .map_err(|error| EnterpriseAgentError::InvalidArgument(error.to_string()))?;
+            if invocation.route != InteractionCommandRoute::Agent {
+                return Err(EnterpriseAgentError::InvalidArgument(format!(
+                    "/{} must be executed through execute_command",
+                    invocation.name
+                )));
+            }
+            (
+                Some(
+                    invocation
+                        .model_prompt(&self.config.workspace)
+                        .map_err(|error| {
+                            EnterpriseAgentError::InvalidArgument(error.to_string())
+                        })?,
+                ),
+                invocation.is_read_only(),
+            )
+        } else {
+            (None, false)
+        };
+        let mentions = ContextMentionResolver::new(self.config.context_mentions.clone())
+            .map_err(|error| EnterpriseAgentError::Configuration(error.to_string()))?
+            .resolve(&self.config.workspace, &message)
+            .map_err(|error| EnterpriseAgentError::InvalidArgument(error.to_string()))?;
+        let mention_context = mentions
+            .context_text()
+            .map_err(|error| EnterpriseAgentError::InvalidArgument(error.to_string()))?;
+        let explicit_context = match (command_context, mention_context) {
+            (Some(command), Some(mentions)) => Some(format!(
+                "Built-in command expansion:\n{command}\n\nExplicit @ context:\n{mentions}"
+            )),
+            (Some(command), None) => Some(command),
+            (None, Some(mentions)) => Some(mentions),
+            (None, None) => None,
+        };
         let _operation = self.operation_lock.lock().await;
         let session = self.ensure_session(session_id, &message).await?;
         let session_id = parse_uuid(&session.id, "session")?;
+        self.checkpoints
+            .begin_turn(session_id)
+            .map_err(checkpoint_error)?;
         let conversation = self
             .sessions
             .list_conversations(&session.id)
@@ -599,8 +906,19 @@ impl EnterpriseAgent {
         let mut events = vec![EnterpriseAgentEvent {
             kind: "execution_started".into(),
             message: "Enterprise Agent accepted the request".into(),
-            data: json!({"sessionId": session_id}),
+            data: json!({"sessionId": session_id, "readOnly": read_only}),
         }];
+        if !mentions.is_empty() {
+            events.push(EnterpriseAgentEvent {
+                kind: "context_mentions_resolved".into(),
+                message: format!("Resolved {} explicit context file(s)", mentions.files.len()),
+                data: json!({
+                    "mentions": mentions.explicit_mentions,
+                    "files": mentions.files,
+                    "totalBytes": mentions.total_bytes,
+                }),
+            });
+        }
 
         let context = match self
             .contexts
@@ -608,7 +926,7 @@ impl EnterpriseAgent {
                 session_id: session.id.clone(),
                 conversation_id: Some(conversation.id.clone()),
                 system_prompt: Some(self.config.system_prompt.clone()),
-                user_input: None,
+                user_input: explicit_context,
                 max_messages: Some(100),
                 max_tokens: Some(128_000),
                 working_directory: Some(self.config.workspace.to_string_lossy().into_owned()),
@@ -630,7 +948,12 @@ impl EnterpriseAgent {
 
         let definitions = self.tools.list().await.map_err(tool_error)?;
         let mut request = context_model_request(&context, &self.config.model.profile, session_id)?;
-        request.tools = model_tool_definitions(&definitions)?;
+        let exposed_definitions = definitions
+            .iter()
+            .filter(|definition| !read_only || definition.category != "filesystem.write")
+            .cloned()
+            .collect::<Vec<_>>();
+        request.tools = model_tool_definitions(&exposed_definitions)?;
         let mut response_text = None;
         let mut tool_call_count = 0_usize;
         for turn in 0..8_u8 {
@@ -673,6 +996,18 @@ impl EnterpriseAgent {
             ));
             for call in &response.tool_calls {
                 let definition = resolve_tool_definition(&definitions, &call.name)?;
+                if read_only
+                    && (definition.category == "filesystem.write"
+                        || (definition.category == "process.execute"
+                            && !safe_command(&call.arguments)))
+                {
+                    let error = EnterpriseAgentError::Tool(format!(
+                        "tool {} is denied by the read-only command boundary",
+                        definition.name
+                    ));
+                    self.record_failure(session_id, &mut events, &error).await;
+                    return Err(error);
+                }
                 let mut tool_request =
                     ToolRequest::new(definition.key.clone(), call.arguments.clone());
                 tool_request.session_id = Some(session_id);
@@ -786,6 +1121,21 @@ impl EnterpriseAgent {
         {
             self.record_failure(session_id, &mut events, &error).await;
             return Err(error);
+        }
+        if let Some(checkpoint) = self
+            .checkpoints
+            .finish_turn(session_id)
+            .map_err(checkpoint_error)?
+        {
+            events.push(EnterpriseAgentEvent {
+                kind: "checkpoint_created".into(),
+                message: format!("Captured {} Agent file change(s)", checkpoint.files),
+                data: json!({
+                    "sessionId": session_id,
+                    "checkpointId": checkpoint.checkpoint_id,
+                    "files": checkpoint.files,
+                }),
+            });
         }
         events.push(EnterpriseAgentEvent {
             kind: "execution_finished".into(),
@@ -955,6 +1305,7 @@ impl EnterpriseAgent {
 async fn register_workspace_tools(
     manager: &Arc<ToolManager>,
     workspace: &Path,
+    checkpoints: Arc<CheckpointStore>,
 ) -> EnterpriseAgentResult<()> {
     let root = std::fs::canonicalize(workspace).map_err(|error| {
         EnterpriseAgentError::Workspace(format!(
@@ -1035,7 +1386,41 @@ async fn register_workspace_tools(
     let write_root = root.clone();
     let write_tool = Arc::new(FunctionTool::new(write_key, move |request, _| {
         let root = write_root.clone();
-        async move { write_workspace_file(&root, &request.parameters) }
+        let checkpoints = checkpoints.clone();
+        async move {
+            let session_id = request.session_id.ok_or_else(|| {
+                ToolError::InvalidArgument("write_file requires an active session".into())
+            })?;
+            let relative = request
+                .parameters
+                .get("path")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ToolError::InvalidArgument("write_file path is required".into()))?;
+            let content = request
+                .parameters
+                .get("content")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    ToolError::InvalidArgument("write_file content is required".into())
+                })?;
+            let prepared = checkpoints
+                .prepare_write(session_id, relative, content)
+                .map_err(checkpoint_tool_error)?;
+            match write_workspace_file(&root, &request.parameters) {
+                Ok(output) => {
+                    checkpoints
+                        .commit_write(prepared)
+                        .map_err(checkpoint_tool_error)?;
+                    Ok(output)
+                }
+                Err(error) => {
+                    checkpoints
+                        .abort_write(prepared)
+                        .map_err(checkpoint_tool_error)?;
+                    Err(error)
+                }
+            }
+        }
     }));
 
     let mut command_definition = ToolDefinition::new(
@@ -1352,6 +1737,19 @@ fn resolve_workspace_path(
     relative: &str,
     directory: bool,
 ) -> Result<PathBuf, ToolError> {
+    let path = resolve_workspace_resource(root, relative)?;
+    if (directory && !path.is_dir()) || (!directory && !path.is_file()) {
+        return Err(ToolError::PermissionDenied(
+            "path is not a readable workspace resource".into(),
+        ));
+    }
+    Ok(path)
+}
+
+pub(crate) fn resolve_workspace_resource(
+    root: &Path,
+    relative: &str,
+) -> Result<PathBuf, ToolError> {
     let relative_path = Path::new(relative);
     if relative.trim().is_empty()
         || relative.len() > 4_096
@@ -1376,7 +1774,7 @@ fn resolve_workspace_path(
     }
     let path = std::fs::canonicalize(root.join(relative_path))
         .map_err(|error| ToolError::execution("workspace_path", error.to_string(), false))?;
-    if !path.starts_with(root) || (directory && !path.is_dir()) || (!directory && !path.is_file()) {
+    if !path.starts_with(root) {
         return Err(ToolError::PermissionDenied(
             "path is not a readable workspace resource".into(),
         ));
@@ -1384,14 +1782,29 @@ fn resolve_workspace_path(
     Ok(path)
 }
 
-fn blocked_workspace_name(name: &str) -> bool {
+pub(crate) fn blocked_workspace_name(name: &str) -> bool {
     let normalized = name.to_ascii_lowercase();
     matches!(
         normalized.as_str(),
-        ".git" | ".agent" | "target" | "node_modules" | ".env" | "credentials"
-    ) || normalized.starts_with(".env.")
+        ".git"
+            | ".agent"
+            | ".ssh"
+            | ".aws"
+            | ".azure"
+            | ".kube"
+            | ".gnupg"
+            | "target"
+            | "node_modules"
+            | ".env"
+            | "credentials"
+            | "credentials.json"
+            | "secrets"
+            | "secrets.json"
+    ) || normalized.starts_with(".env")
         || normalized.ends_with(".key")
         || normalized.ends_with(".pem")
+        || normalized.ends_with(".p12")
+        || normalized.ends_with(".pfx")
 }
 
 fn model_tool_definitions(
@@ -1629,6 +2042,14 @@ fn model_error(error: impl std::fmt::Display) -> EnterpriseAgentError {
 
 fn tool_error(error: impl std::fmt::Display) -> EnterpriseAgentError {
     EnterpriseAgentError::Tool(error.to_string())
+}
+
+fn checkpoint_error(error: impl std::fmt::Display) -> EnterpriseAgentError {
+    EnterpriseAgentError::Runtime(error.to_string())
+}
+
+fn checkpoint_tool_error(error: impl std::fmt::Display) -> ToolError {
+    ToolError::execution("write_file_checkpoint", error.to_string(), false)
 }
 
 fn workspace_error(error: impl std::fmt::Display) -> EnterpriseAgentError {

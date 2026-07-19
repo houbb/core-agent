@@ -98,6 +98,14 @@ pub struct ProjectNode {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CommandSuggestion {
+    pub name: String,
+    pub usage: String,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChangeItem {
     pub path: String,
     pub status: String,
@@ -151,11 +159,16 @@ pub struct DesktopWorkspaceSnapshot {
     pub profile: String,
     pub model: String,
     pub project_tree: Vec<ProjectNode>,
+    pub commands: Vec<CommandSuggestion>,
     pub changes: Vec<ChangeItem>,
     pub trace: Vec<TraceStep>,
     pub memory: Vec<MemoryItem>,
     pub tools: Vec<ToolStatus>,
     pub sessions: Vec<SessionItem>,
+    pub resume_session: bool,
+    pub permission_mode: String,
+    pub config_sources: Vec<core_agent::ConfigSourceInfo>,
+    pub effective_config: Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -168,7 +181,9 @@ pub struct AgentMessageRequest {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSubmission {
-    pub session_id: Uuid,
+    pub session_id: Option<Uuid>,
+    pub response: Option<String>,
+    pub action: core_agent::EnterpriseCommandAction,
 }
 
 #[derive(Debug, Deserialize)]

@@ -5,7 +5,7 @@ use std::{io, io::IsTerminal};
 use async_trait::async_trait;
 use core_agent::{
     EnterpriseAgent, EnterpriseAgentConfig, EnterpriseApprovalDecision, EnterpriseApprovalHandler,
-    EnterpriseApprovalRequest, EnterpriseModelConfig, EnterpriseSessionStatus, PermissionMode,
+    EnterpriseApprovalRequest, EnterpriseSessionStatus,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -26,34 +26,42 @@ pub struct EmbeddedAgentClient {
 
 impl EmbeddedAgentClient {
     pub async fn open(root: &Path, config: &CliConfig) -> CliResult<Self> {
+        Self::open_with_approval(root, config, Arc::new(TerminalApprovalHandler)).await
+    }
+
+    pub async fn open_with_approval(
+        root: &Path,
+        config: &CliConfig,
+        approval: Arc<dyn EnterpriseApprovalHandler>,
+    ) -> CliResult<Self> {
         let workspace = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-        let api_key = config
-            .model
-            .api_key_env
-            .as_deref()
-            .map(std::env::var)
-            .transpose()
-            .map_err(|error| {
-                CliError::Configuration(format!("cannot load model API key: {error}"))
-            })?;
-        let mut runtime_config =
-            EnterpriseAgentConfig::new(agent_directory(root).join("runtime"), &workspace);
-        runtime_config.model = EnterpriseModelConfig {
-            provider: config.model.provider.clone(),
-            endpoint: config.model.endpoint.clone(),
-            api_key,
-            model: config.model.name.clone(),
-            profile: config.model.profile.clone(),
-        };
-        runtime_config.permission_mode = PermissionMode::parse(&config.permissions.mode)
-            .map_err(|error| CliError::Configuration(error.to_string()))?;
+        let mut agent_config = core_agent::AgentConfig::default();
+        agent_config.model.provider = config.model.provider.clone();
+        agent_config.model.endpoint = config.model.endpoint.clone();
+        agent_config.model.name = config.model.name.clone();
+        agent_config.model.profile = config.model.profile.clone();
+        agent_config.model.api_key = config.api_key();
+        agent_config.permissions.mode = config.permissions.mode.clone();
+        agent_config.memory.enabled = config.memory.enabled;
+        agent_config.session.resume_last = config.session.resume_last;
+        agent_config.context.max_mentions = config.context.max_mentions;
+        agent_config.context.max_files = config.context.max_files;
+        agent_config.context.max_file_bytes = config.context.max_file_bytes;
+        agent_config.context.max_total_bytes = config.context.max_total_bytes;
+        agent_config.context.max_directory_depth = config.context.max_directory_depth;
+        let runtime_config = EnterpriseAgentConfig::from_agent_config(
+            agent_directory(root).join("runtime"),
+            &workspace,
+            &agent_config,
+        )
+        .map_err(|error| CliError::Configuration(error.to_string()))?;
         let runtime = EnterpriseAgent::open(runtime_config)
             .await
             .map_err(api_error)?;
         Ok(Self {
             runtime: Arc::new(runtime),
             workspace: workspace.to_string_lossy().into_owned(),
-            approval: Arc::new(TerminalApprovalHandler),
+            approval,
         })
     }
 
@@ -177,57 +185,34 @@ impl ProfessionalAgentClient for EmbeddedAgentClient {
         &self,
         request: ProfessionalRequest,
     ) -> CliResult<ProfessionalResponse> {
-        match request.invocation.name.as_str() {
-            "tools" => {
-                let tools = self.runtime.tools().list().await.map_err(api_error)?;
-                Ok(ProfessionalResponse {
-                    summary: format!("{} tool(s) available", tools.len()),
-                    items: tools
-                        .into_iter()
-                        .map(|tool| format!("{} — {}", tool.key, tool.description))
-                        .collect(),
-                    data: json!({}),
-                })
-            }
-            "tasks" => {
-                let sessions = self.runtime.list_sessions().await.map_err(api_error)?;
-                Ok(ProfessionalResponse {
-                    summary: format!("{} Agent session(s)", sessions.len()),
-                    items: sessions
-                        .into_iter()
-                        .map(|session| {
-                            format!(
-                                "{}  {}  {}",
-                                session.session_id, session.state, session.title
-                            )
-                        })
-                        .collect(),
-                    data: json!({}),
-                })
-            }
-            "memory" => Ok(ProfessionalResponse {
-                summary: "Project memory is managed inside the embedded Runtime".into(),
+        let invocation = core_agent::InteractionCommandInvocation {
+            name: request.invocation.name,
+            arguments: request.invocation.arguments,
+            route: request.invocation.route,
+        };
+        let line = invocation.to_line();
+        if let Some(outcome) = self
+            .runtime
+            .execute_command(&line, request.session_id)
+            .await
+            .map_err(api_error)?
+        {
+            return Ok(ProfessionalResponse {
+                summary: outcome.response,
                 items: Vec::new(),
-                data: json!({}),
-            }),
-            _ => {
-                let arguments = request.invocation.arguments.join(" ");
-                let prompt = format!(
-                    "Professional command: /{} {}\nProfile: {}\nWorkspace: {}\nProvide a concise, actionable result.",
-                    request.invocation.name, arguments, request.profile, request.project.root
-                );
-                let run = self
-                    .runtime
-                    .run_with_approval(prompt, None, self.approval.as_ref())
-                    .await
-                    .map_err(api_error)?;
-                Ok(ProfessionalResponse {
-                    summary: run.response,
-                    items: vec![format!("Session: {}", run.session_id)],
-                    data: json!({"sessionId": run.session_id}),
-                })
-            }
+                data: outcome.data,
+            });
         }
+        let run = self
+            .runtime
+            .run_with_approval(line, request.session_id, self.approval.as_ref())
+            .await
+            .map_err(api_error)?;
+        Ok(ProfessionalResponse {
+            summary: run.response,
+            items: vec![format!("Session: {}", run.session_id)],
+            data: json!({"sessionId": run.session_id}),
+        })
     }
 }
 

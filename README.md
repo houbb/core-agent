@@ -8,43 +8,31 @@ Terminal ─┐
 Desktop ──┘                         └─ 其余 Runtime 内部模块
 ```
 
+## 一次配置，到处使用
+
+复制 [core-agent-config.example.yaml](core-agent-config.example.yaml) 到用户目录，只替换 `apiKey` 即可：
+
+- Windows：`C:\Users\<用户名>\core-agent\core-agent-config.yaml`
+- Linux/macOS：`~/core-agent/core-agent-config.yaml`
+
+推荐配置默认使用 `deepseek-v4-flash`、`risk-based` 权限、项目 Memory、新 chat 新 session，并限制 `@` 上下文的数量、目录深度和总体积。也支持同目录的 `.yml` 或 `.json`，但同一级只能存在一种格式；`CORE_AGENT_CONFIG` 可显式选择文件，`CORE_AGENT_HOME` 可覆盖配置目录。
+
+配置来源按 `builtin < user file < project file < environment` 合并。核心只依赖强类型 `AgentConfig`；YAML、JSON、环境变量和密钥引用都是可替换的 `ConfigProvider`/`SecretResolver` 策略，未来切换远程配置或系统凭据库不会改变 `EnterpriseAgent`。
+
+可以直接写 `apiKey` 获得最短启动路径，也可以使用 `apiKeyRef: env:CORE_AGENT_API_KEY` 避免明文。配置与 Debug 输出始终脱敏；请限制用户配置文件权限并勿提交密钥。仓库已忽略 `core-agent-config.yaml|yml|json`、`.agent/` 与 `*.dpapi`。若密钥曾出现在聊天、日志或终端历史中，应在 Provider 控制台轮换。
+
 ## 快速体验：Terminal
 
-准备 Rust 1.94+，并启动一个 OpenAI-compatible 模型服务。默认配置使用 Ollama：
+准备 Rust 1.94+。打开任意项目目录即可运行，不需要先执行 `init`：
 
 ```powershell
-ollama pull qwen3
-ollama serve
-```
-
-在项目根目录初始化并运行：
-
-```powershell
-cargo run -p agent-cli --bin agent -- init
 cargo run -p agent-cli --bin agent -- run "分析当前项目并给出下一步建议"
 cargo run -p agent-cli --bin agent -- chat
 ```
 
-`agent init` 会创建 `.agent/config.yaml`。默认 `server.mode: embedded`，CLI 会直接加载 Runtime；不需要启动 Agent Server。模型、工作区和会话数据均由这一个进程管理，会话数据保存在 `.agent/runtime`。
+`agent chat` 在真实交互终端中启动全屏 TUI：品牌/项目状态区、滚动会话区、带边框输入框、`/` 命令面板、`@` 工作区文件/文件夹候选、忙碌状态和风险审批卡片集中在同一个布局。工作区打开时预建最多 20,000 文件的 git-aware 安全索引；`@` 后至少输入 3 个字符才在内存中模糊过滤，因此大项目不会每按键重复扫描磁盘。`↑/↓` 选择候选，`Tab/Enter` 只补全并继续输入，再次 Enter 才发送；`Alt+Enter` 换行、`Ctrl+Shift+C` 复制最近 Agent/错误消息、`PgUp/PgDn` 滚动、`Ctrl+D` 退出。非 TTY、`run` 等脚本入口和 `--no-color` 继续使用稳定纯文本输出。
 
-也可直接使用 DeepSeek 等 OpenAI-compatible 服务。API Key 只通过环境变量注入，配置文件只保存变量名；`.agent/` 已加入 `.gitignore`：
-
-```yaml
-model:
-  provider: deepseek
-  endpoint: https://api.deepseek.com
-  name: deepseek-v4-flash
-  profile: default
-  api_key_env: CORE_AGENT_API_KEY
-permissions:
-  mode: risk-based
-```
-
-```powershell
-$env:CORE_AGENT_API_KEY = "<your-api-key>"
-cargo run -p agent-cli --bin agent -- run "分析当前目录，并说明项目入口"
-Remove-Item Env:\CORE_AGENT_API_KEY
-```
+CLI 直接在当前进程加载全部 Runtime，不需要启动 Agent Server。TUI 是 Runtime-thin 视觉适配层：命令候选来自核心 `InteractionCommandRegistry`，`@` 最终解析仍由核心 Context resolver 完成，审批通过 `EnterpriseApprovalHandler` 回到同一权限引擎。会话和 Runtime 数据保存在项目 `.agent/`，全局模型密钥不复制进项目。`agent init` 仍可选：它只生成 `server/workspace` 项目覆盖、Context 和 Memory 目录，不再重复模型配置。
 
 常用命令：
 
@@ -54,6 +42,18 @@ cargo run -p agent-cli --bin agent -- status
 cargo run -p agent-cli --bin agent -- tools
 cargo run -p agent-cli --bin agent -- project
 ```
+
+交互式 `chat` 默认创建新 session，同一次 chat 的后续消息持续使用它；`session.resumeLast: true` 可恢复最近 session。常用内置命令包括 `/help`、`/new`、`/clear`、`/sessions`、`/status`、`/tools`、`/config`、`/plan`、`/review`、`/test`、`/fix`、`/undo` 和 `/redo`。命令定义、解析、路由及 Agent Prompt 展开来自核心注册表，Terminal 与 Desktop 不维护两套实现。
+
+使用 `@` 显式补充文件或文件夹上下文：
+
+```text
+解释 @README.md 的启动流程
+对照 @"design docs/spec.md" 检查 @src 文件夹
+/plan 根据 @design-docs 和 @Cargo.toml 制定迁移方案
+```
+
+文件夹按稳定顺序递归展开普通 UTF-8 文件。所有入口复用核心 resolver 与工作区策略：禁止越界、敏感文件、`.git`、`.agent`、依赖/构建目录和符号链接，并执行 mention 数、文件数、深度、单文件与总字节上限。Session 只保存用户原始输入，解析出的正文只进入本轮 Context 快照。
 
 如需连接兼容的远程部署，可在 `.agent/config.yaml` 中显式设置 `server.mode: remote` 和 `server.url`；这不是本地使用的前置条件。
 
@@ -67,7 +67,9 @@ npm install
 npm run tauri dev
 ```
 
-桌面端在 Tauri 进程中直接持有同一个 `EnterpriseAgent`，无需另开 Terminal 或后台 Agent 服务。默认模型为 `qwen3`，默认端点为 `http://127.0.0.1:11434/v1`。可使用以下环境变量覆盖：
+桌面端在 Tauri 进程中直接持有同一个 `EnterpriseAgent`，无需另开 Terminal 或后台 Agent 服务。点击顶部 `Open folder` 即可选择项目；应用按新目录重新解析配置，并按规范化工作区路径的 SHA-256 将 Runtime 数据隔离到应用数据目录的 `projects/<hash>/runtime`。Console 与 Terminal 共用 `/` 命令注册表和预索引 `@file`/`@folder` 模糊查询：至少输入 3 个字符后出现候选，Enter/Tab 只补全，Shift+Enter 换行。项目树可用 `Add @` 加入选中路径，用户消息和 Agent 回复都可显式复制；设置页显示权限模式与脱敏配置来源。
+
+可使用以下环境变量作为最高优先级覆盖：
 
 - `CORE_AGENT_WORKSPACE`
 - `CORE_AGENT_MODEL_PROVIDER`
@@ -89,7 +91,9 @@ npm run tauri dev
 | `risk-based`（默认） | 编辑、执行项目代码及高风险命令审核；极少数只读命令自动通过 | 日常开发的安全/效率平衡 |
 | `auto` | 软审批自动通过；越界路径、敏感文件和明确破坏性命令仍拒绝 | 可信临时工作区、无人值守任务 |
 
-Terminal 在交互式会话中使用 `[y/N]` 审批；管道、CI 等非交互输入默认拒绝。`auto` 不是 OS 沙箱：对不完全可信的仓库，优先使用 `strict` 或 `risk-based`，并在容器/虚拟机中运行。
+Terminal TUI 在会话内显示审批卡片（工具、风险、原因和参数），`Enter/Y` 仅允许本次，`N/Esc` 拒绝；纯文本交互使用 `[y/N]`，管道、CI 等非交互输入默认拒绝。`auto` 不是 OS 沙箱：对不完全可信的仓库，优先使用 `strict` 或 `risk-based`，并在容器/虚拟机中运行。
+
+`/plan`、`/review`、`/explain`、`/commit`、`/pr` 由 Runtime 强制只读：模型看不到写工具，臆造的写调用或副作用命令也会在审批前拒绝。每轮通过 `write_file` 的修改会形成 session 级文件 Checkpoint；`/undo`、`/redo` 不依赖 Git，并在当前内容 SHA-256 仍匹配时整组恢复。用户后续手工编辑会触发冲突并拒绝覆盖；shell、网络、部署等副作用不在文件 Checkpoint 的回退范围内。
 
 ## 架构边界
 
@@ -108,10 +112,11 @@ npm test
 npm run build
 ```
 
-真实云模型测试默认忽略，避免 CI 意外产生费用；显式设置 `CORE_AGENT_API_KEY` 后可运行：
+真实云模型测试默认忽略，避免 CI 意外产生费用。Runtime 级测试使用环境变量；Terminal 真实启动测试直接验证用户全局配置：
 
 ```powershell
 cargo test -p core-agent --test live_deepseek_e2e -- --ignored --nocapture
+cargo test -p agent-cli --test live_global_config_e2e -- --ignored --nocapture
 ```
 
 设计到实现的审计矩阵见 [design-docs/capability-traceability.md](design-docs/capability-traceability.md)。

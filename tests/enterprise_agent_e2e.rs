@@ -128,6 +128,42 @@ impl ModelProvider for WorkspaceWriteProvider {
     }
 }
 
+struct InteractionProvider {
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl ModelProvider for InteractionProvider {
+    fn key(&self) -> &str {
+        "interaction"
+    }
+
+    async fn invoke(
+        &self,
+        request: &ModelRequest,
+        profile: &ModelProfile,
+    ) -> Result<ModelResponse, ModelError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let prompt = format!("{:?}", request.messages);
+        assert!(prompt.contains("FILE_CONTEXT_MARKER"));
+        assert!(prompt.contains("FOLDER_CONTEXT_MARKER"));
+        assert!(!request.tools.iter().any(|tool| tool.name == "write_file"));
+        assert!(request.tools.iter().any(|tool| tool.name == "read_file"));
+        Ok(ModelResponse {
+            request_id: request.id,
+            provider: self.key().into(),
+            model: profile.model.clone(),
+            profile: profile.key.clone(),
+            content: vec![ContentPart::text("Unified interaction completed.")],
+            tool_calls: Vec::new(),
+            usage: ModelUsage::default(),
+            finish_reason: FinishReason::Stop,
+            metadata: BTreeMap::new(),
+            raw_response: None,
+        })
+    }
+}
+
 async fn deterministic_model() -> Arc<ModelManager> {
     let catalog = Arc::new(InMemoryModelCatalog::default());
     catalog
@@ -168,6 +204,27 @@ async fn workspace_write_model() -> Arc<ModelManager> {
     Arc::new(
         ModelManagerBuilder::new(catalog)
             .add_provider(Arc::new(WorkspaceWriteProvider))
+            .build()
+            .unwrap(),
+    )
+}
+
+async fn interaction_model(calls: Arc<AtomicUsize>) -> Arc<ModelManager> {
+    let catalog = Arc::new(InMemoryModelCatalog::default());
+    catalog
+        .upsert_provider(&ProviderDefinition::new("interaction", "Interaction"))
+        .await
+        .unwrap();
+    catalog
+        .upsert_profile(
+            &ModelProfile::new("default", "interaction", "test-model")
+                .with_capability(ModelCapability::Chat),
+        )
+        .await
+        .unwrap();
+    Arc::new(
+        ModelManagerBuilder::new(catalog)
+            .add_provider(Arc::new(InteractionProvider { calls }))
             .build()
             .unwrap(),
     )
@@ -382,6 +439,13 @@ async fn workspace_edit_requires_a_person_and_then_completes_end_to_end() {
         .await
         .unwrap();
 
+    let read_only = agent
+        .run("/plan create a marker file", None)
+        .await
+        .unwrap_err();
+    assert!(read_only.to_string().contains("read-only command boundary"));
+    assert!(!workspace.path().join("agent-created.txt").exists());
+
     let denied = agent.run("create a marker file", None).await.unwrap_err();
     assert!(denied.to_string().contains("approval denied"));
     assert!(!workspace.path().join("agent-created.txt").exists());
@@ -403,6 +467,42 @@ async fn workspace_edit_requires_a_person_and_then_completes_end_to_end() {
         .events
         .iter()
         .any(|event| event.kind == "tool_completed"));
+    assert!(approved
+        .events
+        .iter()
+        .any(|event| event.kind == "checkpoint_created"));
+
+    let undo = agent
+        .execute_command("/undo", Some(approved.session_id))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(undo.response.starts_with("Undid checkpoint"));
+    assert!(!workspace.path().join("agent-created.txt").exists());
+    let redo = agent
+        .execute_command("/redo", Some(approved.session_id))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(redo.response.starts_with("Redid checkpoint"));
+    assert_eq!(
+        std::fs::read_to_string(workspace.path().join("agent-created.txt")).unwrap(),
+        "created through governed tool loop\n"
+    );
+    agent
+        .execute_command("/undo", Some(approved.session_id))
+        .await
+        .unwrap();
+    std::fs::write(workspace.path().join("agent-created.txt"), "manual edit").unwrap();
+    let conflict = agent
+        .execute_command("/redo", Some(approved.session_id))
+        .await
+        .unwrap_err();
+    assert!(conflict.to_string().contains("modified outside"));
+    assert_eq!(
+        std::fs::read_to_string(workspace.path().join("agent-created.txt")).unwrap(),
+        "manual edit"
+    );
 
     let auto_workspace = tempfile::tempdir().unwrap();
     let auto_data = tempfile::tempdir().unwrap();
@@ -425,4 +525,66 @@ async fn workspace_edit_requires_a_person_and_then_completes_end_to_end() {
         .events
         .iter()
         .any(|event| event.kind == "approval_required"));
+}
+
+#[tokio::test]
+async fn shared_mentions_and_slash_commands_are_end_to_end_and_zero_model_when_local() {
+    let workspace = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    std::fs::create_dir(workspace.path().join("context-folder")).unwrap();
+    std::fs::write(workspace.path().join("context.txt"), "FILE_CONTEXT_MARKER").unwrap();
+    std::fs::write(
+        workspace.path().join("context-folder/nested.txt"),
+        "FOLDER_CONTEXT_MARKER",
+    )
+    .unwrap();
+    std::fs::write(workspace.path().join(".env"), "PRIVATE_VALUE").unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut config = EnterpriseAgentConfig::new(data.path(), workspace.path());
+    config.model = EnterpriseModelConfig {
+        provider: "interaction".into(),
+        endpoint: "http://127.0.0.1:1/v1".into(),
+        api_key: None,
+        model: "test-model".into(),
+        profile: "default".into(),
+    };
+    let agent = EnterpriseAgent::with_model(config, interaction_model(calls.clone()).await)
+        .await
+        .unwrap();
+
+    let tools = agent
+        .execute_command("/tools", None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(tools.response.contains("read_file"));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    let run = agent
+        .run("/plan Analyze @context.txt and @context-folder", None)
+        .await
+        .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(run
+        .events
+        .iter()
+        .any(|event| event.kind == "context_mentions_resolved"));
+    let conversations = agent
+        .sessions()
+        .list_conversations(&run.session_id.to_string())
+        .await
+        .unwrap();
+    let messages = agent
+        .sessions()
+        .list_messages(&conversations[0].id, 0, 20)
+        .await
+        .unwrap();
+    let persisted = format!("{:?}", messages.items);
+    assert!(persisted.contains("/plan Analyze @context.txt"));
+    assert!(!persisted.contains("FILE_CONTEXT_MARKER"));
+    assert!(!persisted.contains("FOLDER_CONTEXT_MARKER"));
+
+    let sessions_before = agent.list_sessions().await.unwrap().len();
+    assert!(agent.run("Read @.env", None).await.is_err());
+    assert_eq!(agent.list_sessions().await.unwrap().len(), sessions_before);
 }
