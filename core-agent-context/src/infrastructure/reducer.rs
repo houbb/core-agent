@@ -1,7 +1,7 @@
 //! ContextReducer — Token 裁剪器 trait
 //!
 //! 负责裁剪 ContextSegment 列表，确保 Token 总量不超预算。
-//! MVP 提供 SummaryReducer（摘要 + 保留最近 N），
+//! MVP 提供 SummaryReducer（兼容名称，默认执行 Last-N + Token 预算），
 //! 未来可扩展为滑动窗口、重要性评分、语义压缩等策略。
 
 use async_trait::async_trait;
@@ -29,7 +29,7 @@ impl Default for ReducerConfig {
         Self {
             max_total_tokens: 128_000,
             keep_recent_messages: 20,
-            enable_summary: true,
+            enable_summary: false,
             slot_budgets: HashMap::new(),
         }
     }
@@ -37,7 +37,7 @@ impl Default for ReducerConfig {
 
 /// ContextReducer — Token 裁剪策略
 ///
-/// MVP 实现：摘要 + 保留最近 N 条
+/// MVP 实现：保留最近 N 条；显式启用时可生成兼容性提取摘要
 /// 未来扩展：滑动窗口、重要性评分、语义压缩
 #[async_trait]
 pub trait ContextReducer: Send + Sync {

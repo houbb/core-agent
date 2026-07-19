@@ -4,15 +4,13 @@
 //! 以后 Audit / Analytics / Workflow 直接监听，不需要侵入业务代码。
 
 use std::sync::Arc;
+use std::sync::RwLock;
 
 use chrono::{DateTime, Utc};
 use tokio::sync::broadcast;
 
 use crate::domain::{
-    conversation::Conversation,
-    manifest::Manifest,
-    message::Message,
-    session::Session,
+    conversation::Conversation, manifest::Manifest, message::Message, session::Session,
 };
 
 /// 事件总线 — 基于 tokio::sync::broadcast
@@ -20,6 +18,7 @@ use crate::domain::{
 /// 所有事件通过此总线发布，任何 Runtime 都可以订阅。
 pub struct EventBus {
     sender: broadcast::Sender<Arc<SessionEvent>>,
+    observers: Arc<RwLock<Vec<Arc<dyn crate::infrastructure::SessionObserver>>>>,
 }
 
 impl EventBus {
@@ -27,18 +26,36 @@ impl EventBus {
     ///
     /// `capacity` 指定缓冲区大小，默认 256。
     pub fn new(capacity: usize) -> Self {
-        let (sender, _) = broadcast::channel(capacity);
-        Self { sender }
+        let (sender, _) = broadcast::channel(capacity.max(1));
+        Self {
+            sender,
+            observers: Arc::new(RwLock::new(Vec::new())),
+        }
     }
 
     /// 发布事件
     pub fn publish(&self, event: SessionEvent) {
-        let _ = self.sender.send(Arc::new(event));
+        let event = Arc::new(event);
+        let _ = self.sender.send(event.clone());
+        if let Ok(observers) = self.observers.read() {
+            for observer in observers.iter() {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    observer.on_event(&event);
+                }));
+            }
+        }
     }
 
     /// 订阅事件
     pub fn subscribe(&self) -> broadcast::Receiver<Arc<SessionEvent>> {
         self.sender.subscribe()
+    }
+
+    /// 注册日志、审计或指标观察者。
+    pub fn register_observer(&self, observer: Arc<dyn crate::infrastructure::SessionObserver>) {
+        if let Ok(mut observers) = self.observers.write() {
+            observers.push(observer);
+        }
     }
 }
 
@@ -52,6 +69,7 @@ impl Clone for EventBus {
     fn clone(&self) -> Self {
         Self {
             sender: self.sender.clone(),
+            observers: self.observers.clone(),
         }
     }
 }
@@ -152,6 +170,23 @@ impl SessionEvent {
 mod tests {
     use super::*;
     use crate::domain::session::Session;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingObserver(AtomicUsize);
+
+    struct PanickingObserver;
+
+    impl crate::infrastructure::SessionObserver for CountingObserver {
+        fn on_event(&self, _event: &SessionEvent) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl crate::infrastructure::SessionObserver for PanickingObserver {
+        fn on_event(&self, _event: &SessionEvent) {
+            panic!("observer failure");
+        }
+    }
 
     #[test]
     fn test_event_bus_publish_subscribe() {
@@ -176,5 +211,34 @@ mod tests {
             timestamp: Utc::now(),
         };
         assert_eq!(event.event_name(), "session.created");
+    }
+
+    #[test]
+    fn test_event_observer_receives_event() {
+        let bus = EventBus::new(16);
+        let observer = Arc::new(CountingObserver(AtomicUsize::new(0)));
+        bus.register_observer(observer.clone());
+
+        bus.publish(SessionEvent::SessionCreated {
+            session: Session::new("Observed"),
+            timestamp: Utc::now(),
+        });
+
+        assert_eq!(observer.0.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_observer_failure_does_not_escape_event_bus() {
+        let bus = EventBus::new(0);
+        let observer = Arc::new(CountingObserver(AtomicUsize::new(0)));
+        bus.register_observer(Arc::new(PanickingObserver));
+        bus.register_observer(observer.clone());
+
+        bus.publish(SessionEvent::SessionCreated {
+            session: Session::new("Observed"),
+            timestamp: Utc::now(),
+        });
+
+        assert_eq!(observer.0.load(Ordering::SeqCst), 1);
     }
 }

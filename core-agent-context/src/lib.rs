@@ -10,8 +10,8 @@
 //! ```text
 //! api/            — 公开 API（ContextRuntime）
 //! application/    — 用例编排（ContextApplicationService, ContextPipeline, SummaryReducer, DefaultComposer）
-//! domain/         — 核心实体（Context, ContextSegment, ContextSlot, ContextSource + 7 个子 Context）
-//! infrastructure/ — 扩展点 trait（ContextProvider, ContextReducer, ContextComposer, ContextSnapshotStore）
+//! domain/         — 核心实体（Context, ContextSegment, ContextSlot, ContextSource + 8 个子 Context）
+//! infrastructure/ — Provider / Reducer / Composer / Serializer / Snapshot / Cache / Observer 扩展点
 //! persistence/    — SQLite 实现（SqliteContextSnapshotStore + 4 个内置 Provider）
 //! dto/            — 输入输出 DTO
 //! error/          — 统一错误类型
@@ -51,21 +51,20 @@ pub mod persistence;
 pub use api::ContextRuntime;
 
 // DTO
-pub use dto::{
-    BuildContextRequest, ContextResponse, ContextSnapshotResponse, ListResponse,
-};
+pub use dto::{BuildContextRequest, ContextResponse, ContextSnapshotResponse, ListResponse};
 
 // Domain
 pub use domain::{
     context::{Context, ContextSegment, ContextSource, TokenDistribution},
+    conversation_context::{ContextMessage, ConversationContext},
+    environment_context::EnvironmentContext,
+    memory_context::MemoryContext,
+    plugin_context::PluginContext,
     slot::{ContextSlot, SlotConfig, TokenCounter},
     system_context::SystemContext,
-    conversation_context::{ContextMessage, ConversationContext},
-    workspace_context::WorkspaceContext,
-    memory_context::MemoryContext,
-    environment_context::EnvironmentContext,
-    plugin_context::PluginContext,
+    tool_context::ToolContext,
     user_context::UserContext,
+    workspace_context::WorkspaceContext,
 };
 
 // Error
@@ -73,8 +72,9 @@ pub use error::{ContextError, ContextResult};
 
 // Infrastructure
 pub use infrastructure::{
-    ContextComposer, ContextProvider, ContextReducer, ContextSnapshotMeta, ContextSnapshotStore,
-    ProviderContext, ReducerConfig,
+    ContextCache, ContextComposer, ContextObservation, ContextObserver, ContextProvider,
+    ContextReducer, ContextSerializer, ContextSnapshotMeta, ContextSnapshotStore, ContextStage,
+    JsonContextSerializer, ProviderContext, ReducerConfig,
 };
 
 // Persistence

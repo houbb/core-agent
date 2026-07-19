@@ -28,6 +28,8 @@ pub struct BuildContextRequest {
 /// Context 响应
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextResponse {
+    /// 完整结构化 Context，供后续 Runtime 与 Inspector 使用
+    pub context: crate::domain::Context,
     /// Context ID
     pub id: String,
     /// Session ID
@@ -133,6 +135,7 @@ pub struct ListResponse<T> {
 impl From<&crate::domain::context::Context> for ContextResponse {
     fn from(ctx: &crate::domain::context::Context) -> Self {
         Self {
+            context: ctx.clone(),
             id: ctx.id.to_string(),
             session_id: ctx.session_id.to_string(),
             conversation_id: ctx.conversation_id.map(|id| id.to_string()),
@@ -199,12 +202,14 @@ mod tests {
             id: Uuid::new_v4(),
             session_id: Uuid::new_v4(),
             conversation_id: None,
+            segments: Vec::new(),
             system: SystemContext::new("You are helpful"),
             conversation: ConversationContext::new(),
             workspace: WorkspaceContext::new(),
             memory: MemoryContext::new(),
             environment: EnvironmentContext::new(),
             plugin: PluginContext::new(),
+            tool: ToolContext::new(),
             user: UserContext::new().with_input("Hello"),
             total_tokens: 100,
             token_distribution: TokenDistribution::default(),

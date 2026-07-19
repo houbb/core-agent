@@ -7,7 +7,7 @@ use std::process::Command;
 
 use crate::domain::context::{ContextSegment, ContextSource};
 use crate::domain::slot::{ContextSlot, TokenCounter};
-use crate::error::ContextResult;
+use crate::error::{ContextError, ContextResult};
 use crate::infrastructure::{ContextProvider, ProviderContext};
 
 /// EnvironmentProvider
@@ -42,25 +42,14 @@ impl ContextProvider for EnvironmentProvider {
     }
 
     async fn collect(&self, ctx: &ProviderContext) -> ContextResult<Vec<ContextSegment>> {
-        let os = std::env::consts::OS.to_string();
-        let os_version = os_version();
-        let shell = std::env::var("SHELL").or_else(|_| std::env::var("COMSPEC")).ok();
-        let working_directory = ctx
-            .working_directory
-            .clone()
-            .or_else(|| std::env::current_dir().ok().map(|p| p.display().to_string()));
-
-        let git_branch = git_branch(&working_directory);
-        let git_root = git_root(&working_directory);
-
-        let content = serde_json::json!({
-            "os": os,
-            "os_version": os_version,
-            "shell": shell,
-            "working_directory": working_directory,
-            "git_branch": git_branch,
-            "git_root": git_root,
+        let working_directory = ctx.working_directory.clone().or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|path| path.display().to_string())
         });
+        let content = tokio::task::spawn_blocking(move || collect_environment(working_directory))
+            .await
+            .map_err(|error| ContextError::Internal(format!("environment task failed: {error}")))?;
 
         let token_count = TokenCounter::estimate_json(&content);
         let segment = ContextSegment::new(
@@ -74,6 +63,26 @@ impl ContextProvider for EnvironmentProvider {
 
         Ok(vec![segment])
     }
+}
+
+fn collect_environment(working_directory: Option<String>) -> serde_json::Value {
+    let os = std::env::consts::OS.to_string();
+    let os_version = os_version();
+    let shell = std::env::var("SHELL")
+        .or_else(|_| std::env::var("COMSPEC"))
+        .ok();
+
+    let git_branch = git_branch(&working_directory);
+    let git_root = git_root(&working_directory);
+
+    serde_json::json!({
+        "os": os,
+        "os_version": os_version,
+        "shell": shell,
+        "working_directory": working_directory,
+        "git_branch": git_branch,
+        "git_root": git_root,
+    })
 }
 
 /// 获取操作系统版本
@@ -122,8 +131,8 @@ fn git_root(working_dir: &Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use core_agent_session::SqliteSessionStore;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_environment_provider_collect() {

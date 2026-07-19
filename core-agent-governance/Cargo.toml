@@ -1,0 +1,17 @@
+[package]
+name = "core-agent-governance"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Enterprise AI identity, asset governance and cost ledger"
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+core-agent-platform = { path = "../core-agent-platform" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

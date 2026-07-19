@@ -63,6 +63,18 @@ impl MessageStatus {
             MessageStatus::Failed => "FAILED",
         }
     }
+
+    /// 检查消息状态是否允许转换。
+    pub fn can_transition_to(&self, target: &MessageStatus) -> bool {
+        matches!(
+            (self, target),
+            (MessageStatus::Pending, MessageStatus::Streaming)
+                | (MessageStatus::Pending, MessageStatus::Done)
+                | (MessageStatus::Pending, MessageStatus::Failed)
+                | (MessageStatus::Streaming, MessageStatus::Done)
+                | (MessageStatus::Streaming, MessageStatus::Failed)
+        )
+    }
 }
 
 /// Message 实体
@@ -108,20 +120,51 @@ impl Message {
     }
 
     /// 更新消息状态
-    pub fn update_status(&mut self, status: MessageStatus) {
+    pub fn update_status(&mut self, status: MessageStatus) -> Result<(), MessageStatusError> {
+        self.transition_to(status)
+    }
+
+    /// 按流式消息生命周期更新状态。
+    pub fn transition_to(&mut self, status: MessageStatus) -> Result<(), MessageStatusError> {
+        if !self.status.can_transition_to(&status) {
+            return Err(MessageStatusError {
+                current: self.status,
+                target: status,
+            });
+        }
         self.status = status;
+        Ok(())
     }
 
     /// 标记为完成
-    pub fn mark_done(&mut self) {
-        self.status = MessageStatus::Done;
+    pub fn mark_done(&mut self) -> Result<(), MessageStatusError> {
+        self.transition_to(MessageStatus::Done)
     }
 
     /// 标记为失败
-    pub fn mark_failed(&mut self) {
-        self.status = MessageStatus::Failed;
+    pub fn mark_failed(&mut self) -> Result<(), MessageStatusError> {
+        self.transition_to(MessageStatus::Failed)
     }
 }
+
+/// 非法消息状态转换错误。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageStatusError {
+    pub current: MessageStatus,
+    pub target: MessageStatus,
+}
+
+impl std::fmt::Display for MessageStatusError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Illegal message status transition: {:?} → {:?}",
+            self.current, self.target
+        )
+    }
+}
+
+impl std::error::Error for MessageStatusError {}
 
 #[cfg(test)]
 mod tests {
@@ -144,11 +187,20 @@ mod tests {
         let conv_id = Uuid::new_v4();
         let mut msg = Message::new(conv_id, MessageRole::Assistant, "Thinking...");
 
-        msg.update_status(MessageStatus::Streaming);
+        msg.transition_to(MessageStatus::Streaming).unwrap();
         assert_eq!(msg.status, MessageStatus::Streaming);
 
-        msg.mark_done();
+        msg.transition_to(MessageStatus::Done).unwrap();
         assert_eq!(msg.status, MessageStatus::Done);
+    }
+
+    #[test]
+    fn test_invalid_message_status_transition() {
+        let conv_id = Uuid::new_v4();
+        let mut msg = Message::new(conv_id, MessageRole::Assistant, "done");
+        msg.transition_to(MessageStatus::Done).unwrap();
+
+        assert!(msg.transition_to(MessageStatus::Streaming).is_err());
     }
 
     #[test]

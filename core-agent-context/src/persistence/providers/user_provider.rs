@@ -6,7 +6,7 @@ use async_trait::async_trait;
 
 use crate::domain::context::{ContextSegment, ContextSource};
 use crate::domain::slot::{ContextSlot, TokenCounter};
-use crate::error::ContextResult;
+use crate::error::{ContextError, ContextResult};
 use crate::infrastructure::{ContextProvider, ProviderContext};
 
 /// UserProvider
@@ -43,7 +43,9 @@ impl ContextProvider for UserProvider {
     async fn collect(&self, ctx: &ProviderContext) -> ContextResult<Vec<ContextSegment>> {
         // 从 extensions 中读取 user_input
         let user_input = match ctx.extensions.get("user_input") {
-            Some(val) => val.as_str().unwrap_or("").to_string(),
+            Some(val) => val.as_str().ok_or_else(|| {
+                ContextError::InvalidArgument("user_input extension must be a string".into())
+            })?,
             None => return Ok(Vec::new()),
         };
 
@@ -51,11 +53,11 @@ impl ContextProvider for UserProvider {
             return Ok(Vec::new());
         }
 
-        let token_count = TokenCounter::estimate(&user_input);
+        let token_count = TokenCounter::estimate(user_input);
         let segment = ContextSegment::new(
             ContextSource::User,
             ContextSlot::User,
-            serde_json::Value::String(user_input),
+            serde_json::Value::String(user_input.to_owned()),
             token_count,
             ContextSlot::User.default_priority(),
         )
@@ -68,9 +70,9 @@ impl ContextProvider for UserProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core_agent_session::SqliteSessionStore;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use core_agent_session::SqliteSessionStore;
 
     #[tokio::test]
     async fn test_user_provider_collect() {
@@ -112,5 +114,20 @@ mod tests {
         let segments = provider.collect(&ctx).await.unwrap();
 
         assert!(segments.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_user_provider_rejects_non_string_input() {
+        let store = Arc::new(SqliteSessionStore::new(":memory:").unwrap());
+        let session_id = uuid::Uuid::new_v4();
+        let mut context = ProviderContext::new(session_id, store);
+        context
+            .extensions
+            .insert("user_input".into(), serde_json::json!({"unexpected": true}));
+
+        assert!(matches!(
+            UserProvider::new().collect(&context).await.unwrap_err(),
+            ContextError::InvalidArgument(_)
+        ));
     }
 }

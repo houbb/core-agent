@@ -74,10 +74,7 @@ pub struct Attachment {
 
 impl Attachment {
     /// 创建新附件
-    pub fn new(
-        attachment_type: AttachmentType,
-        name: impl Into<String>,
-    ) -> Self {
+    pub fn new(attachment_type: AttachmentType, name: impl Into<String>) -> Self {
         Self {
             id: Uuid::new_v4(),
             message_id: None,

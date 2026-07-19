@@ -45,6 +45,9 @@ impl ContextProvider for SystemProvider {
             Some(p) => p.clone(),
             None => return Ok(Vec::new()),
         };
+        if prompt.is_empty() {
+            return Ok(Vec::new());
+        }
 
         let token_count = TokenCounter::estimate(&prompt);
         let segment = ContextSegment::new(
@@ -63,8 +66,8 @@ impl ContextProvider for SystemProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use core_agent_session::SqliteSessionStore;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_system_provider_collect() {

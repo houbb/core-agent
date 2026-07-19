@@ -1,7 +1,11 @@
 //! Infrastructure 层 — 扩展点定义
 //!
-//! Session Runtime 的六个扩展点，定义稳定的 trait 接口。
+//! Session Runtime 的扩展点，定义稳定的 trait 接口。
 //! 企业版只需要新增实现，不需要修改核心代码。
+
+pub mod lifecycle;
+pub mod observer;
+pub mod serializer;
 
 use async_trait::async_trait;
 
@@ -13,6 +17,10 @@ use crate::domain::{
     session::{Session, SessionId},
 };
 use crate::error::SessionResult;
+
+pub use lifecycle::{NoopSessionLifecycle, SessionLifecycle};
+pub use observer::SessionObserver;
+pub use serializer::{JsonSessionSerializer, SessionSerializer};
 
 /// SessionStore — 持久化存储接口
 ///
@@ -29,10 +37,7 @@ pub trait SessionStore: Send + Sync {
     // ── Conversation ──
     async fn create_conversation(&self, conversation: &Conversation) -> SessionResult<()>;
     async fn get_conversation(&self, id: &ConversationId) -> SessionResult<Option<Conversation>>;
-    async fn list_conversations(
-        &self,
-        session_id: &SessionId,
-    ) -> SessionResult<Vec<Conversation>>;
+    async fn list_conversations(&self, session_id: &SessionId) -> SessionResult<Vec<Conversation>>;
 
     // ── Message ──
     async fn append_message(&self, message: &Message) -> SessionResult<()>;
@@ -54,4 +59,29 @@ pub trait SessionStore: Send + Sync {
     // ── Attachment ──
     async fn create_attachment(&self, attachment: &Attachment) -> SessionResult<()>;
     async fn get_attachment(&self, id: &AttachmentId) -> SessionResult<Option<Attachment>>;
+
+    /// 原子创建 Session、Manifest 和默认 Conversation。
+    ///
+    /// 默认实现保持第三方 Store 源码兼容；支持事务的 Store 应覆盖此方法。
+    async fn create_session_bundle(
+        &self,
+        session: &Session,
+        manifest: &Manifest,
+        conversation: &Conversation,
+    ) -> SessionResult<()> {
+        self.create_session(session).await?;
+        self.upsert_manifest(manifest).await?;
+        self.create_conversation(conversation).await
+    }
+
+    /// 统计 Session 下全部 Message，供 Manifest 同步使用。
+    async fn count_messages_for_session(&self, session_id: &SessionId) -> SessionResult<u64> {
+        let conversations = self.list_conversations(session_id).await?;
+        let mut total = 0u64;
+        for conversation in conversations {
+            let (_, count) = self.list_messages(&conversation.id, 0, 1).await?;
+            total = total.saturating_add(count);
+        }
+        Ok(total)
+    }
 }

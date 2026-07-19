@@ -1,26 +1,27 @@
-//! SummaryReducer — 摘要 + 保留最近 N 条
+//! SummaryReducer — 兼容名称下的确定性 Last-N Reducer
 //!
 //! MVP 实现的核心 Reducer 策略：
 //! 1. 保留所有 required segments（不可裁剪）
-//! 2. 对 Conversation Slot：保留最近 N 条完整消息，超出部分压缩为一条摘要
-//! 3. 对其他 Slot：按优先级从低到高裁剪，确保不超 Token 预算
+//! 2. 对 Conversation Slot：保留最近 N 条完整消息，并继续按 Token 预算保留最新消息
+//! 3. 对其他 Slot：按优先级从高到低裁剪，确保不超 Token 预算
+//! 4. 仅当显式开启 `enable_summary` 时生成兼容性的提取式摘要
 
 use async_trait::async_trait;
+use std::cmp::Reverse;
 use std::collections::HashMap;
 
 use crate::domain::context::{ContextSegment, ContextSource};
 use crate::domain::slot::{ContextSlot, TokenCounter};
-use crate::error::ContextResult;
+use crate::error::{ContextError, ContextResult};
 use crate::infrastructure::{ContextReducer, ReducerConfig};
 
 /// SummaryReducer
-pub struct SummaryReducer {
-    config: ReducerConfig,
-}
+pub struct SummaryReducer;
 
 impl SummaryReducer {
-    pub fn new(config: ReducerConfig) -> Self {
-        Self { config }
+    /// 保留旧构造函数签名；运行配置由 Pipeline 在每次请求时传入。
+    pub fn new(_config: ReducerConfig) -> Self {
+        Self
     }
 }
 
@@ -41,75 +42,134 @@ impl ContextReducer for SummaryReducer {
         segments: Vec<ContextSegment>,
         config: &ReducerConfig,
     ) -> ContextResult<Vec<ContextSegment>> {
+        let mut grouped: HashMap<ContextSlot, Vec<ContextSegment>> = HashMap::new();
+        for segment in segments {
+            grouped.entry(segment.slot).or_default().push(segment);
+        }
+
         let mut result = Vec::new();
         let mut total_tokens = 0u64;
+        let mut slot_tokens = HashMap::<ContextSlot, u64>::new();
+        let mut slot_order: Vec<_> = ContextSlot::ORDERED
+            .into_iter()
+            .filter(|slot| grouped.contains_key(slot))
+            .collect();
+        slot_order.sort_by_key(|slot| {
+            Reverse(
+                grouped
+                    .get(slot)
+                    .and_then(|segments| segments.iter().map(|segment| segment.priority).max())
+                    .unwrap_or_else(|| slot.default_priority()),
+            )
+        });
 
-        // Step 1: 保留所有 required segments（如 System Prompt、Environment、User Input）
-        let (required, optional): (Vec<_>, Vec<_>) =
-            segments.into_iter().partition(|s| s.required);
-
-        for seg in required {
-            total_tokens += seg.token_count;
-            result.push(seg);
-        }
-
-        // Step 2: 按 Slot 分组 optional segments
-        let grouped: HashMap<ContextSlot, Vec<ContextSegment>> =
-            optional.into_iter().fold(HashMap::new(), |mut acc, seg| {
-                acc.entry(seg.slot).or_default().push(seg);
-                acc
-            });
-
-        // Step 3: 对 Conversation Slot 特殊处理
-        if let Some(conv_segments) = grouped.get(&ContextSlot::Conversation) {
-            let (recent, older) = split_conversation(conv_segments, config.keep_recent_messages);
-
-            // 保留最近 N 条
-            for seg in &recent {
-                total_tokens += seg.token_count;
-                result.push(seg.clone());
-            }
-
-            // 压缩旧消息为摘要
-            if !older.is_empty() && config.enable_summary {
-                let summary_segment = summarize_older_messages(&older)?;
-                total_tokens += summary_segment.token_count;
-                result.push(summary_segment);
+        // Required 内容先统一计入，确保 optional 内容不会挤占其预算。
+        for slot in &slot_order {
+            let Some(slot_segments) = grouped.get_mut(slot) else {
+                continue;
+            };
+            let mut index = 0;
+            while index < slot_segments.len() {
+                if slot_segments[index].required {
+                    let segment = slot_segments.remove(index);
+                    require_capacity(&segment, config, &mut total_tokens, &mut slot_tokens)?;
+                    result.push(segment);
+                } else {
+                    index += 1;
+                }
             }
         }
 
-        // Step 4: 对其他 Slot，按预算裁剪
-        for (slot, segs) in grouped.iter() {
-            if *slot == ContextSlot::Conversation {
-                continue; // 已处理
+        // Optional 内容按稳定 Slot 优先级裁剪。
+        for slot in slot_order {
+            let Some(mut optional) = grouped.remove(&slot) else {
+                continue;
+            };
+            if optional.is_empty() {
+                continue;
             }
 
-            let slot_budget = config.slot_budgets.get(slot).copied().unwrap_or(0);
-            let mut slot_tokens = 0u64;
+            if slot == ContextSlot::Conversation {
+                optional.sort_by_key(conversation_position);
+                let (recent, mut older) =
+                    split_conversation(&optional, config.keep_recent_messages);
+                let mut accepted = Vec::new();
 
-            // 按优先级降序排序
-            let mut sorted_segs = segs.clone();
-            sorted_segs.sort_by_key(|s| -s.priority);
+                // 从最新消息开始选择，最后再恢复时间正序。
+                for segment in recent.into_iter().rev() {
+                    if accept_if_fits(&segment, config, &mut total_tokens, &mut slot_tokens) {
+                        accepted.push(segment);
+                    } else {
+                        older.push(segment);
+                    }
+                }
+                accepted.reverse();
 
-            for seg in &sorted_segs {
-                // 检查 Slot 预算
-                if slot_budget > 0 && slot_tokens + seg.token_count > slot_budget {
-                    continue;
+                if config.enable_summary && !older.is_empty() {
+                    let summary = summarize_older_messages(&older)?;
+                    if accept_if_fits(&summary, config, &mut total_tokens, &mut slot_tokens) {
+                        result.push(summary);
+                    }
                 }
-                // 检查全局预算
-                if config.max_total_tokens > 0
-                    && total_tokens + seg.token_count > config.max_total_tokens
-                {
-                    continue;
+                result.extend(accepted);
+                continue;
+            }
+
+            optional.sort_by_key(|segment| Reverse(segment.priority));
+            for segment in optional {
+                if accept_if_fits(&segment, config, &mut total_tokens, &mut slot_tokens) {
+                    result.push(segment);
                 }
-                slot_tokens += seg.token_count;
-                total_tokens += seg.token_count;
-                result.push(seg.clone());
             }
         }
 
         Ok(result)
     }
+}
+
+fn require_capacity(
+    segment: &ContextSegment,
+    config: &ReducerConfig,
+    total_tokens: &mut u64,
+    slot_tokens: &mut HashMap<ContextSlot, u64>,
+) -> ContextResult<()> {
+    if !accept_if_fits(segment, config, total_tokens, slot_tokens) {
+        return Err(ContextError::TokenBudgetExceeded(format!(
+            "required {} slot needs {} tokens (global limit {}, slot limit {})",
+            segment.slot.as_str(),
+            segment.token_count,
+            config.max_total_tokens,
+            config.slot_budgets.get(&segment.slot).copied().unwrap_or(0)
+        )));
+    }
+    Ok(())
+}
+
+fn accept_if_fits(
+    segment: &ContextSegment,
+    config: &ReducerConfig,
+    total_tokens: &mut u64,
+    slot_tokens: &mut HashMap<ContextSlot, u64>,
+) -> bool {
+    let current_slot_tokens = slot_tokens.get(&segment.slot).copied().unwrap_or(0);
+    let Some(next_total) = total_tokens.checked_add(segment.token_count) else {
+        return false;
+    };
+    let Some(next_slot) = current_slot_tokens.checked_add(segment.token_count) else {
+        return false;
+    };
+    let slot_budget = config.slot_budgets.get(&segment.slot).copied().unwrap_or(0);
+
+    if config.max_total_tokens > 0 && next_total > config.max_total_tokens {
+        return false;
+    }
+    if slot_budget > 0 && next_slot > slot_budget {
+        return false;
+    }
+
+    *total_tokens = next_total;
+    slot_tokens.insert(segment.slot, next_slot);
+    true
 }
 
 /// 将 Conversation segments 分为"最近 N 条"和"旧消息"
@@ -121,15 +181,23 @@ fn split_conversation(
         return (Vec::new(), segments.to_vec());
     }
 
-    // 按 priority 排序（越大越新）
+    // 优先使用 Provider 给出的稳定消息位置；兼容旧 Provider 的 priority。
     let mut sorted = segments.to_vec();
-    sorted.sort_by_key(|s| s.priority);
+    sorted.sort_by_key(conversation_position);
 
     let split_at = sorted.len().saturating_sub(keep_recent);
     let older = sorted[..split_at].to_vec();
     let recent = sorted[split_at..].to_vec();
 
     (recent, older)
+}
+
+fn conversation_position(segment: &ContextSegment) -> i64 {
+    segment
+        .metadata
+        .get("message_index")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(i64::from(segment.priority))
 }
 
 /// 将旧消息压缩为一条摘要
@@ -164,13 +232,12 @@ fn summarize_older_messages(older: &[ContextSegment]) -> ContextResult<ContextSe
     let token_count = TokenCounter::estimate(&summary_text);
 
     Ok(ContextSegment::new(
-        ContextSource::System,
+        ContextSource::Conversation,
         ContextSlot::Conversation,
         serde_json::Value::String(summary_text),
         token_count,
         ContextSlot::Conversation.default_priority() - 1, // 比正常消息优先级稍低
     )
-    .required() // 摘要不可再被裁剪
     .with_meta("reduced", "true")
     .with_meta("original_message_count", older.len().to_string()))
 }
@@ -178,6 +245,8 @@ fn summarize_older_messages(older: &[ContextSegment]) -> ContextResult<ContextSe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::DefaultComposer;
+    use crate::infrastructure::ContextComposer;
 
     fn make_conv_segment(priority: i32, content: &str) -> ContextSegment {
         let content_json = serde_json::json!({
@@ -185,7 +254,7 @@ mod tests {
             "content": content,
         });
         ContextSegment::new(
-            ContextSource::System,
+            ContextSource::Conversation,
             ContextSlot::Conversation,
             content_json,
             TokenCounter::estimate(content),
@@ -230,14 +299,9 @@ mod tests {
             .collect();
 
         let summary = summarize_older_messages(&older).unwrap();
-        assert!(summary.required);
-        assert_eq!(
-            summary
-                .metadata
-                .get("original_message_count")
-                .unwrap(),
-            "5"
-        );
+        assert!(!summary.required);
+        assert_eq!(summary.source, ContextSource::Conversation);
+        assert_eq!(summary.metadata.get("original_message_count").unwrap(), "5");
         let content_str = summary.content.as_str().unwrap();
         assert!(content_str.contains("[Summary of earlier conversation"));
         assert!(content_str.contains("5 messages"));
@@ -256,7 +320,7 @@ mod tests {
 
         let optional_seg = make_conv_segment(0, "conversation msg");
 
-        let reducer = SummaryReducer::default();
+        let reducer = SummaryReducer;
         let result = reducer
             .reduce(
                 vec![required_seg.clone(), optional_seg],
@@ -291,5 +355,96 @@ mod tests {
             .filter(|s| s.slot == ContextSlot::Conversation)
             .count();
         assert_eq!(conv_count, 6); // 5 recent + 1 summary
+    }
+
+    #[tokio::test]
+    async fn test_reducer_keeps_newest_messages_within_budget() {
+        let segments: Vec<ContextSegment> = (0..5)
+            .map(|i| make_conv_segment(i, &format!("m{}", i)))
+            .collect();
+        let config = ReducerConfig {
+            max_total_tokens: 2,
+            keep_recent_messages: 5,
+            enable_summary: false,
+            ..ReducerConfig::default()
+        };
+
+        let result = SummaryReducer.reduce(segments, &config).await.unwrap();
+
+        let contents: Vec<_> = result
+            .iter()
+            .filter_map(|segment| segment.content.get("content")?.as_str())
+            .collect();
+        assert_eq!(contents, vec!["m3", "m4"]);
+    }
+
+    #[tokio::test]
+    async fn test_required_content_over_budget_is_explicit_error() {
+        let segment = ContextSegment::new(
+            ContextSource::System,
+            ContextSlot::System,
+            serde_json::Value::String("required".into()),
+            10,
+            100,
+        )
+        .required();
+        let config = ReducerConfig {
+            max_total_tokens: 5,
+            ..ReducerConfig::default()
+        };
+
+        let error = SummaryReducer
+            .reduce(vec![segment], &config)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ContextError::TokenBudgetExceeded(_)));
+    }
+
+    #[tokio::test]
+    async fn test_conversation_total_survives_when_messages_are_trimmed() {
+        let metadata = ContextSegment::new(
+            ContextSource::Conversation,
+            ContextSlot::Conversation,
+            serde_json::Value::Null,
+            0,
+            60,
+        )
+        .required()
+        .with_meta("conversation_meta", "true")
+        .with_meta("conversation_total", "5")
+        .with_meta("message_index", "-1");
+        let message = ContextSegment::new(
+            ContextSource::Conversation,
+            ContextSlot::Conversation,
+            serde_json::json!({
+                "id": uuid::Uuid::new_v4().to_string(),
+                "role": "USER",
+                "content": "too large",
+                "created_at": chrono::Utc::now().to_rfc3339(),
+            }),
+            10,
+            60,
+        )
+        .with_meta("message_id", uuid::Uuid::new_v4().to_string())
+        .with_meta("message_index", "4")
+        .with_meta("conversation_total", "5");
+        let config = ReducerConfig {
+            max_total_tokens: 1,
+            keep_recent_messages: 5,
+            ..ReducerConfig::default()
+        };
+
+        let reduced = SummaryReducer
+            .reduce(vec![metadata, message], &config)
+            .await
+            .unwrap();
+        let context = DefaultComposer::new()
+            .compose(uuid::Uuid::new_v4(), None, reduced)
+            .await
+            .unwrap();
+
+        assert!(context.conversation.messages.is_empty());
+        assert_eq!(context.conversation.total_count, 5);
     }
 }

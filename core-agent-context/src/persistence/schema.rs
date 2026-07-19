@@ -13,7 +13,11 @@ CREATE TABLE IF NOT EXISTS context_snapshot (
     content             TEXT NOT NULL,
     token_count         INTEGER NOT NULL DEFAULT 0,
     hash                TEXT NOT NULL,
-    build_duration_ms   INTEGER NOT NULL DEFAULT 0
+    build_duration_ms   INTEGER NOT NULL DEFAULT 0,
+    create_time         TEXT NOT NULL DEFAULT '',
+    update_time         TEXT NOT NULL DEFAULT '',
+    create_user         TEXT NOT NULL DEFAULT 'system',
+    update_user         TEXT NOT NULL DEFAULT 'system'
 );
 
 CREATE INDEX IF NOT EXISTS idx_context_snapshot_session

@@ -41,7 +41,7 @@ impl ContextProvider for ConversationProvider {
     }
 
     fn source(&self) -> ContextSource {
-        ContextSource::System
+        ContextSource::Conversation
     }
 
     fn slot(&self) -> ContextSlot {
@@ -66,7 +66,12 @@ impl ContextProvider for ConversationProvider {
 
                 conversations
                     .iter()
-                    .find(|c| matches!(c.conversation_type, core_agent_session::ConversationType::Main))
+                    .find(|c| {
+                        matches!(
+                            c.conversation_type,
+                            core_agent_session::ConversationType::Main
+                        )
+                    })
                     .map(|c| c.id)
                     .ok_or_else(|| {
                         ContextError::NotFound(format!(
@@ -77,18 +82,53 @@ impl ContextProvider for ConversationProvider {
             }
         };
 
-        // 读取消息
-        let limit = ctx.max_messages.unwrap_or(100).min(1000) as u64;
-        let (messages, _total) = ctx
+        let conversation = ctx
             .session_store
-            .list_messages(&conversation_id, 0, limit)
+            .get_conversation(&conversation_id)
+            .await
+            .map_err(ContextError::from)?
+            .ok_or_else(|| ContextError::NotFound(format!("Conversation {}", conversation_id)))?;
+        if conversation.session_id != ctx.session_id {
+            return Err(ContextError::InvalidArgument(format!(
+                "Conversation {} does not belong to Session {}",
+                conversation_id, ctx.session_id
+            )));
+        }
+
+        // 先读取总数，再从尾部取最新 N 条，最终保持时间正序。
+        let limit = u64::try_from(ctx.max_messages.unwrap_or(20))
+            .map_err(|_| ContextError::InvalidArgument("max_messages is too large".into()))?;
+        let (_, total) = ctx
+            .session_store
+            .list_messages(&conversation_id, 0, 0)
+            .await
+            .map_err(ContextError::from)?;
+        let metadata_segment = ContextSegment::new(
+            ContextSource::Conversation,
+            ContextSlot::Conversation,
+            serde_json::Value::Null,
+            0,
+            ContextSlot::Conversation.default_priority(),
+        )
+        .required()
+        .with_meta("conversation_meta", "true")
+        .with_meta("conversation_total", total.to_string())
+        .with_meta("message_index", "-1");
+        if limit == 0 {
+            return Ok(vec![metadata_segment]);
+        }
+        let offset = total.saturating_sub(limit);
+        let (messages, _) = ctx
+            .session_store
+            .list_messages(&conversation_id, offset, limit)
             .await
             .map_err(ContextError::from)?;
 
-        let mut segments = Vec::with_capacity(messages.len());
-        let base_priority = ContextSlot::Conversation.default_priority();
+        let mut segments = Vec::with_capacity(messages.len() + 1);
+        segments.push(metadata_segment);
+        let priority = ContextSlot::Conversation.default_priority();
 
-        // 按时间顺序，后面的消息优先级稍高
+        // Slot 优先级保持固定，消息先后由 message_index 单独表达。
         for (i, msg) in messages.iter().enumerate() {
             let token_count = TokenCounter::estimate(&msg.content);
             let content = serde_json::json!({
@@ -100,14 +140,20 @@ impl ContextProvider for ConversationProvider {
             });
 
             let segment = ContextSegment::new(
-                ContextSource::System,
+                ContextSource::Conversation,
                 ContextSlot::Conversation,
                 content,
                 token_count,
-                base_priority + (i as i32), // 后面的消息权重稍高
+                priority,
             )
             .with_meta("message_id", msg.id.to_string())
-            .with_meta("message_index", i.to_string());
+            .with_meta(
+                "message_index",
+                offset
+                    .saturating_add(u64::try_from(i).unwrap_or(u64::MAX))
+                    .to_string(),
+            )
+            .with_meta("conversation_total", total.to_string());
 
             segments.push(segment);
         }
@@ -119,11 +165,10 @@ impl ContextProvider for ConversationProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use core_agent_session::{
-        Conversation, Message, MessageRole, Session, SessionState, SessionStore,
-        SqliteSessionStore,
+        Conversation, Message, MessageRole, Session, SessionState, SessionStore, SqliteSessionStore,
     };
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_conversation_provider_collect() {
@@ -144,13 +189,41 @@ mod tests {
             store.append_message(&msg).await.unwrap();
         }
 
-        let ctx = ProviderContext::new(session_id, store)
-            .with_conversation(conv.id);
+        let ctx = ProviderContext::new(session_id, store).with_conversation(conv.id);
 
         let provider = ConversationProvider::new();
         let segments = provider.collect(&ctx).await.unwrap();
 
-        assert_eq!(segments.len(), 5);
+        assert_eq!(segments.len(), 6);
         assert_eq!(segments[0].slot, ContextSlot::Conversation);
+        assert_eq!(segments[0].metadata.get("conversation_total").unwrap(), "5");
+    }
+
+    #[tokio::test]
+    async fn test_conversation_provider_collects_latest_messages() {
+        let store = Arc::new(SqliteSessionStore::new(":memory:").unwrap());
+        let session = Session::new("Test");
+        store.create_session(&session).await.unwrap();
+        let conversation = Conversation::new_main(session.id);
+        store.create_conversation(&conversation).await.unwrap();
+        for index in 0..5 {
+            store
+                .append_message(&Message::new(
+                    conversation.id,
+                    MessageRole::User,
+                    format!("message-{index}"),
+                ))
+                .await
+                .unwrap();
+        }
+
+        let mut context =
+            ProviderContext::new(session.id, store).with_conversation(conversation.id);
+        context.max_messages = Some(2);
+        let segments = ConversationProvider::new().collect(&context).await.unwrap();
+
+        assert_eq!(segments.len(), 3);
+        assert_eq!(segments[1].content["content"], "message-3");
+        assert_eq!(segments[2].content["content"], "message-4");
     }
 }

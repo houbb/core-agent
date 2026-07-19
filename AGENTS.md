@@ -120,6 +120,14 @@ For substantial features, architecture changes, ambiguous product work, migratio
 
 3）简明扼要的使用+变更内容
 
-# 变更日志
+# 文档更新
+
+## 变更日志
 
 每一次功能全部完成后，将变更压缩更新到 CHANGELOG.md 中，版本号主动询问一下用户
+
+## README
+
+README.md 也进行同步的更新，保持文档最新
+
+要面向用户去写，保留启动方式（方便快速体验）。

@@ -4,7 +4,6 @@
 
 use async_trait::async_trait;
 use chrono::Utc;
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::domain::context::{Context, ContextSegment, TokenDistribution};
@@ -38,64 +37,119 @@ impl ContextComposer for DefaultComposer {
         &self,
         session_id: Uuid,
         conversation_id: Option<Uuid>,
-        segments: Vec<ContextSegment>,
+        mut segments: Vec<ContextSegment>,
     ) -> ContextResult<Context> {
         let now = Utc::now();
         let id = Uuid::new_v4();
         let mut dist = TokenDistribution::default();
         let mut total_tokens = 0u64;
 
-        let mut system = SystemContext::new("");
+        segments.sort_by(|left, right| {
+            if left.slot == ContextSlot::Conversation
+                && right.slot == ContextSlot::Conversation
+                && left.priority == right.priority
+            {
+                conversation_position(left).cmp(&conversation_position(right))
+            } else {
+                right.priority.cmp(&left.priority).then_with(|| {
+                    right
+                        .slot
+                        .default_priority()
+                        .cmp(&left.slot.default_priority())
+                })
+            }
+        });
+
+        let mut system = SystemContext::default();
         let mut conversation = ConversationContext::new();
-        let workspace = WorkspaceContext::new();
-        let memory = MemoryContext::new();
-        let mut environment = EnvironmentContext::new();
-        let plugin = PluginContext::new();
+        let mut workspace = WorkspaceContext::new();
+        let mut memory = MemoryContext::new();
+        let mut environment = EnvironmentContext::default();
+        let mut plugin = PluginContext::new();
+        let mut tool = ToolContext::new();
         let mut user = UserContext::new();
 
         for seg in &segments {
-            total_tokens += seg.token_count;
+            add_tokens(&mut total_tokens, seg.token_count)?;
 
             match seg.slot {
                 ContextSlot::System => {
-                    dist.system += seg.token_count;
+                    add_tokens(&mut dist.system, seg.token_count)?;
                     if let Some(s) = seg.content.as_str() {
-                        system.prompt = Some(s.to_string());
+                        append_text(&mut system.prompt, s);
+                    } else {
+                        append_json(&mut system.config, &seg.content);
                     }
                 }
                 ContextSlot::Conversation => {
-                    dist.conversation += seg.token_count;
+                    add_tokens(&mut dist.conversation, seg.token_count)?;
+                    if seg.metadata.get("conversation_meta").map(String::as_str) == Some("true") {
+                        if let Some(total_count) = conversation_total(seg)? {
+                            conversation.total_count = total_count;
+                        }
+                        continue;
+                    }
                     // 检查是否是摘要消息
                     if seg.metadata.get("reduced").map(|s| s.as_str()) == Some("true") {
                         conversation.has_summary = true;
-                        if let Some(summary) = seg.content.as_str() {
-                            conversation.summary = Some(summary.to_string());
-                        }
+                        let summary = seg.content.as_str().ok_or_else(|| {
+                            crate::error::ContextError::InvalidArgument(
+                                "reduced conversation segment must contain text".into(),
+                            )
+                        })?;
+                        append_text(&mut conversation.summary, summary);
                     } else {
                         // 正常消息
                         let role = seg
                             .content
                             .get("role")
                             .and_then(|v| v.as_str())
-                            .unwrap_or("USER")
+                            .ok_or_else(|| {
+                                crate::error::ContextError::InvalidArgument(
+                                    "conversation segment is missing role".into(),
+                                )
+                            })?
                             .to_string();
                         let content = seg
                             .content
                             .get("content")
                             .and_then(|v| v.as_str())
-                            .unwrap_or("")
+                            .ok_or_else(|| {
+                                crate::error::ContextError::InvalidArgument(
+                                    "conversation segment is missing content".into(),
+                                )
+                            })?
                             .to_string();
                         let created_at = seg
                             .content
                             .get("created_at")
                             .and_then(|v| v.as_str())
-                            .unwrap_or("")
+                            .ok_or_else(|| {
+                                crate::error::ContextError::InvalidArgument(
+                                    "conversation segment is missing created_at".into(),
+                                )
+                            })?
                             .to_string();
+                        chrono::DateTime::parse_from_rfc3339(&created_at).map_err(|_| {
+                            crate::error::ContextError::InvalidArgument(
+                                "conversation segment has invalid created_at".into(),
+                            )
+                        })?;
                         let msg_id = seg
                             .metadata
                             .get("message_id")
                             .cloned()
-                            .unwrap_or_else(|| Uuid::new_v4().to_string());
+                            .or_else(|| {
+                                seg.content
+                                    .get("id")
+                                    .and_then(|value| value.as_str())
+                                    .map(str::to_owned)
+                            })
+                            .ok_or_else(|| {
+                                crate::error::ContextError::InvalidArgument(
+                                    "conversation segment is missing message_id".into(),
+                                )
+                            })?;
 
                         let ctx_msg = ContextMessage {
                             id: msg_id,
@@ -104,19 +158,36 @@ impl ContextComposer for DefaultComposer {
                             token_count: seg.token_count,
                             created_at,
                         };
-                        conversation.add_message(ctx_msg);
+                        conversation.messages.push(ctx_msg);
+                        conversation.total_count = conversation.messages.len();
+                    }
+                    if let Some(total_count) = conversation_total(seg)? {
+                        conversation.total_count = conversation.total_count.max(total_count);
                     }
                 }
                 ContextSlot::Workspace => {
-                    dist.workspace += seg.token_count;
+                    add_tokens(&mut dist.workspace, seg.token_count)?;
+                    workspace.enabled = true;
+                    if let Some(root_path) = seg.content.get("root_path").and_then(|v| v.as_str()) {
+                        workspace.root_path = Some(root_path.to_owned());
+                    }
+                    append_json(&mut workspace.content, &seg.content);
                 }
                 ContextSlot::Memory => {
-                    dist.memory += seg.token_count;
+                    add_tokens(&mut dist.memory, seg.token_count)?;
+                    memory.enabled = true;
+                    append_json(&mut memory.content, &seg.content);
                 }
                 ContextSlot::Environment => {
-                    dist.environment += seg.token_count;
+                    add_tokens(&mut dist.environment, seg.token_count)?;
                     if let Some(os) = seg.content.get("os").and_then(|v| v.as_str()) {
                         environment.os = Some(os.to_string());
+                    }
+                    if let Some(version) = seg.content.get("os_version").and_then(|v| v.as_str()) {
+                        environment.os_version = Some(version.to_owned());
+                    }
+                    if let Some(shell) = seg.content.get("shell").and_then(|v| v.as_str()) {
+                        environment.shell = Some(shell.to_owned());
                     }
                     if let Some(wd) = seg
                         .content
@@ -125,85 +196,124 @@ impl ContextComposer for DefaultComposer {
                     {
                         environment.working_directory = Some(wd.to_string());
                     }
-                    if let Some(branch) = seg
-                        .content
-                        .get("git_branch")
-                        .and_then(|v| v.as_str())
-                    {
+                    if let Some(branch) = seg.content.get("git_branch").and_then(|v| v.as_str()) {
                         environment.git_branch = Some(branch.to_string());
                     }
                     if let Some(root) = seg.content.get("git_root").and_then(|v| v.as_str()) {
                         environment.git_root = Some(root.to_string());
                     }
+                    append_json(&mut environment.extra, &seg.content);
                 }
                 ContextSlot::Tool => {
-                    dist.tool += seg.token_count;
+                    add_tokens(&mut dist.tool, seg.token_count)?;
+                    tool.enabled = true;
+                    append_json(&mut tool.content, &seg.content);
                 }
                 ContextSlot::Plugin => {
-                    dist.plugin += seg.token_count;
+                    add_tokens(&mut dist.plugin, seg.token_count)?;
+                    plugin.enabled = true;
+                    append_json(&mut plugin.content, &seg.content);
                 }
                 ContextSlot::User => {
-                    dist.user += seg.token_count;
+                    add_tokens(&mut dist.user, seg.token_count)?;
                     if let Some(input) = seg.content.as_str() {
-                        user.current_input = Some(input.to_string());
+                        append_text(&mut user.current_input, input);
+                    } else {
+                        if let Some(input) =
+                            seg.content.get("current_input").and_then(|v| v.as_str())
+                        {
+                            append_text(&mut user.current_input, input);
+                        }
+                        if let Some(attachments) =
+                            seg.content.get("attachments").and_then(|v| v.as_array())
+                        {
+                            for attachment in attachments {
+                                let attachment = attachment.as_str().ok_or_else(|| {
+                                    crate::error::ContextError::InvalidArgument(
+                                        "user attachment must be a string".into(),
+                                    )
+                                })?;
+                                user.attachments.push(attachment.to_owned());
+                            }
+                        }
+                        append_json(&mut user.extra, &seg.content);
                     }
                 }
             }
         }
 
-        // 计算哈希
-        let hash = compute_context_hash(session_id, conversation_id, total_tokens, &dist, now);
-
-        Ok(Context {
+        let mut context = Context {
             id,
             session_id,
             conversation_id,
+            segments,
             system,
             conversation,
             workspace,
             memory,
             environment,
             plugin,
+            tool,
             user,
             total_tokens,
             token_distribution: dist,
             built_at: now,
-            hash,
+            hash: String::new(),
             build_duration_ms: 0,
-        })
+        };
+        context
+            .refresh_hash()
+            .map_err(|error| crate::error::ContextError::Serialization(error.to_string()))?;
+        Ok(context)
     }
 }
 
-/// 计算 Context 哈希（SHA-256）
-fn compute_context_hash(
-    session_id: Uuid,
-    conversation_id: Option<Uuid>,
-    total_tokens: u64,
-    dist: &TokenDistribution,
-    now: chrono::DateTime<Utc>,
-) -> String {
-    let payload = serde_json::json!({
-        "session_id": session_id.to_string(),
-        "conversation_id": conversation_id.map(|id| id.to_string()),
-        "total_tokens": total_tokens,
-        "distribution": {
-            "system": dist.system,
-            "conversation": dist.conversation,
-            "workspace": dist.workspace,
-            "memory": dist.memory,
-            "environment": dist.environment,
-            "plugin": dist.plugin,
-            "user": dist.user,
-        },
-        "built_at": now.to_rfc3339(),
-    });
+fn append_text(target: &mut Option<String>, value: &str) {
+    match target {
+        Some(existing) if !existing.is_empty() => {
+            existing.push_str("\n\n");
+            existing.push_str(value);
+        }
+        _ => *target = Some(value.to_owned()),
+    }
+}
 
-    let payload_str = serde_json::to_string(&payload).unwrap_or_default();
-    let digest = Sha256::digest(payload_str.as_bytes());
-    digest
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect()
+fn conversation_position(segment: &ContextSegment) -> i64 {
+    segment
+        .metadata
+        .get("message_index")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(i64::from(segment.priority))
+}
+
+fn conversation_total(segment: &ContextSegment) -> ContextResult<Option<usize>> {
+    segment
+        .metadata
+        .get("conversation_total")
+        .map(|value| {
+            value.parse::<usize>().map_err(|_| {
+                crate::error::ContextError::InvalidArgument(
+                    "conversation_total metadata must be a non-negative integer".into(),
+                )
+            })
+        })
+        .transpose()
+}
+
+fn add_tokens(target: &mut u64, value: u64) -> ContextResult<()> {
+    *target = target
+        .checked_add(value)
+        .ok_or_else(|| crate::error::ContextError::Internal("token count overflow".into()))?;
+    Ok(())
+}
+
+fn append_json(target: &mut serde_json::Value, value: &serde_json::Value) {
+    if !target.is_array() {
+        *target = serde_json::Value::Array(Vec::new());
+    }
+    if let Some(items) = target.as_array_mut() {
+        items.push(value.clone());
+    }
 }
 
 #[cfg(test)]
@@ -252,5 +362,116 @@ mod tests {
         assert!(ctx.total_tokens > 0);
         assert!(ctx.system.prompt.is_some());
         assert!(ctx.user.current_input.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_default_composer_preserves_extension_slots() {
+        let composer = DefaultComposer::new();
+        let session_id = Uuid::new_v4();
+        let segments = [
+            (ContextSource::Workspace, ContextSlot::Workspace),
+            (ContextSource::Memory, ContextSlot::Memory),
+            (ContextSource::Tool, ContextSlot::Tool),
+            (ContextSource::Plugin, ContextSlot::Plugin),
+        ]
+        .into_iter()
+        .map(|(source, slot)| {
+            ContextSegment::new(
+                source,
+                slot,
+                serde_json::json!({"slot": slot.as_str()}),
+                3,
+                slot.default_priority(),
+            )
+        })
+        .collect();
+
+        let context = composer.compose(session_id, None, segments).await.unwrap();
+
+        assert!(context.workspace.enabled);
+        assert!(context.memory.enabled);
+        assert!(context.tool.enabled);
+        assert!(context.plugin.enabled);
+        assert_eq!(context.token_distribution.total(), 12);
+        assert_eq!(context.segments.len(), 4);
+        assert!(context
+            .segments
+            .iter()
+            .any(|segment| segment.source == ContextSource::Tool));
+    }
+
+    #[tokio::test]
+    async fn test_semantic_hash_ignores_build_identity() {
+        let composer = DefaultComposer::new();
+        let session_id = Uuid::new_v4();
+        let segment = ContextSegment::new(
+            ContextSource::User,
+            ContextSlot::User,
+            serde_json::Value::String("same input".into()),
+            3,
+            ContextSlot::User.default_priority(),
+        );
+
+        let first = composer
+            .compose(session_id, None, vec![segment.clone()])
+            .await
+            .unwrap();
+        let second = composer
+            .compose(session_id, None, vec![segment])
+            .await
+            .unwrap();
+
+        assert_ne!(first.id, second.id);
+        assert_eq!(first.hash, second.hash);
+    }
+
+    #[tokio::test]
+    async fn test_invalid_conversation_segment_is_rejected() {
+        let segment = ContextSegment::new(
+            ContextSource::Conversation,
+            ContextSlot::Conversation,
+            serde_json::json!({"role": "USER"}),
+            1,
+            ContextSlot::Conversation.default_priority(),
+        );
+
+        assert!(DefaultComposer::new()
+            .compose(Uuid::new_v4(), None, vec![segment])
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn test_semantic_hash_canonicalizes_segment_metadata() {
+        let session_id = Uuid::new_v4();
+        let first_segment = ContextSegment::new(
+            ContextSource::Workspace,
+            ContextSlot::Workspace,
+            serde_json::json!({"path": "README.md"}),
+            2,
+            80,
+        )
+        .with_meta("a", "1")
+        .with_meta("b", "2");
+        let second_segment = ContextSegment::new(
+            ContextSource::Workspace,
+            ContextSlot::Workspace,
+            serde_json::json!({"path": "README.md"}),
+            2,
+            80,
+        )
+        .with_meta("b", "2")
+        .with_meta("a", "1");
+
+        let first = DefaultComposer::new()
+            .compose(session_id, None, vec![first_segment])
+            .await
+            .unwrap();
+        let second = DefaultComposer::new()
+            .compose(session_id, None, vec![second_segment])
+            .await
+            .unwrap();
+
+        assert_eq!(first.hash, second.hash);
     }
 }

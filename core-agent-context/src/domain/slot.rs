@@ -30,6 +30,18 @@ pub enum ContextSlot {
 }
 
 impl ContextSlot {
+    /// Composer 与 Reducer 使用的稳定 Slot 顺序。
+    pub const ORDERED: [ContextSlot; 8] = [
+        ContextSlot::System,
+        ContextSlot::Environment,
+        ContextSlot::Workspace,
+        ContextSlot::Memory,
+        ContextSlot::Conversation,
+        ContextSlot::Tool,
+        ContextSlot::Plugin,
+        ContextSlot::User,
+    ];
+
     /// 获取 Slot 名称（大写）
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -106,9 +118,16 @@ impl SlotConfig {
         self
     }
 
+    /// 覆盖 Slot 优先级。
+    pub fn with_priority(mut self, priority: i32) -> Self {
+        self.priority = Some(priority);
+        self
+    }
+
     /// 获取实际优先级（优先使用覆盖值）
     pub fn effective_priority(&self) -> i32 {
-        self.priority.unwrap_or_else(|| self.slot.default_priority())
+        self.priority
+            .unwrap_or_else(|| self.slot.default_priority())
     }
 }
 
@@ -129,23 +148,26 @@ impl TokenCounter {
     ///
     /// 规则：
     /// - ASCII 字符：4 字符 ≈ 1 token
-    /// - CJK 字符：约 1.5 token / 每字符
+    /// - 非 ASCII 字符：MVP 按 1 字符 ≈ 1 token
     pub fn estimate(text: &str) -> u64 {
-        let mut count = 0u64;
+        if text.is_empty() {
+            return 0;
+        }
+        let mut ascii_count = 0u64;
+        let mut non_ascii_count = 0u64;
         for ch in text.chars() {
             if ch.is_ascii() {
-                count += 1;
+                ascii_count += 1;
             } else {
-                count += 2; // CJK 等宽字符权重更高
+                non_ascii_count += 1;
             }
         }
-        // 避免零值，至少 1 token
-        (count / 4).max(1)
+        ascii_count.div_ceil(4) + non_ascii_count
     }
 
     /// 估算 JSON Value 的 Token 数
     pub fn estimate_json(value: &serde_json::Value) -> u64 {
-        let text = serde_json::to_string(value).unwrap_or_default();
+        let text = value.to_string();
         Self::estimate(&text)
     }
 }
@@ -156,9 +178,15 @@ mod tests {
 
     #[test]
     fn test_slot_priority_order() {
-        assert!(ContextSlot::System.default_priority() > ContextSlot::Environment.default_priority());
-        assert!(ContextSlot::Environment.default_priority() > ContextSlot::Workspace.default_priority());
-        assert!(ContextSlot::Conversation.default_priority() > ContextSlot::User.default_priority());
+        assert!(
+            ContextSlot::System.default_priority() > ContextSlot::Environment.default_priority()
+        );
+        assert!(
+            ContextSlot::Environment.default_priority() > ContextSlot::Workspace.default_priority()
+        );
+        assert!(
+            ContextSlot::Conversation.default_priority() > ContextSlot::User.default_priority()
+        );
         assert_eq!(ContextSlot::System.default_priority(), 100);
         assert_eq!(ContextSlot::User.default_priority(), 30);
     }
@@ -167,15 +195,14 @@ mod tests {
     fn test_token_counter_ascii() {
         let text = "Hello, world!"; // 13 chars ASCII
         let tokens = TokenCounter::estimate(text);
-        assert_eq!(tokens, 13 / 4); // 3
+        assert_eq!(tokens, 4);
     }
 
     #[test]
     fn test_token_counter_chinese() {
         let text = "你好世界"; // 4 CJK chars
         let tokens = TokenCounter::estimate(text);
-        // 4 * 2 / 4 = 2, max(1, 2) = 2
-        assert_eq!(tokens, 2);
+        assert_eq!(tokens, 4);
     }
 
     #[test]
@@ -183,6 +210,11 @@ mod tests {
         let text = "a";
         let tokens = TokenCounter::estimate(text);
         assert_eq!(tokens, 1);
+    }
+
+    #[test]
+    fn test_token_counter_empty_is_zero() {
+        assert_eq!(TokenCounter::estimate(""), 0);
     }
 
     #[test]
@@ -199,5 +231,6 @@ mod tests {
             .with_max_messages(20);
         assert_eq!(config.token_budget, 10000);
         assert_eq!(config.max_messages, Some(20));
+        assert_eq!(config.with_priority(75).effective_priority(), 75);
     }
 }

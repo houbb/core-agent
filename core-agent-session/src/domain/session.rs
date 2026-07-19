@@ -58,7 +58,10 @@ impl SessionState {
 
     /// 是否为活跃状态
     pub fn is_active(&self) -> bool {
-        matches!(self, SessionState::Ready | SessionState::Running | SessionState::Paused)
+        matches!(
+            self,
+            SessionState::Ready | SessionState::Running | SessionState::Paused
+        )
     }
 }
 
@@ -140,7 +143,9 @@ impl Session {
 
     /// 标记为活跃
     pub fn touch(&mut self) {
-        self.last_active_at = Utc::now();
+        let now = Utc::now();
+        self.last_active_at = now;
+        self.updated_at = now;
     }
 }
 
@@ -228,5 +233,16 @@ mod tests {
 
         // Deleted 状态下不可再转换
         assert!(session.transition_to(SessionState::Archived).is_err());
+    }
+
+    #[test]
+    fn test_archive_requires_running_or_paused() {
+        let mut session = Session::new("Test");
+        session.transition_to(SessionState::Ready).unwrap();
+
+        assert!(session.transition_to(SessionState::Archived).is_err());
+
+        session.transition_to(SessionState::Running).unwrap();
+        assert!(session.transition_to(SessionState::Archived).is_ok());
     }
 }

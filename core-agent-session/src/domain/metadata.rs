@@ -33,7 +33,11 @@ impl Metadata {
     }
 
     /// 设置键值对
-    pub fn set<K: Into<String>, V: Serialize>(&mut self, key: K, value: V) -> Result<(), serde_json::Error> {
+    pub fn set<K: Into<String>, V: Serialize>(
+        &mut self,
+        key: K,
+        value: V,
+    ) -> Result<(), serde_json::Error> {
         self.inner.insert(key.into(), serde_json::to_value(value)?);
         Ok(())
     }
@@ -73,7 +77,11 @@ impl Metadata {
 
 impl std::fmt::Display for Metadata {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", serde_json::to_string(&self.inner).unwrap_or_default())
+        write!(
+            f,
+            "{}",
+            serde_json::to_string(&self.inner).unwrap_or_default()
+        )
     }
 }
 

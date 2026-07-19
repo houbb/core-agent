@@ -36,10 +36,7 @@ pub struct ProviderContext {
 
 impl ProviderContext {
     /// 创建新的 ProviderContext
-    pub fn new(
-        session_id: uuid::Uuid,
-        session_store: Arc<dyn SessionStore>,
-    ) -> Self {
+    pub fn new(session_id: uuid::Uuid, session_store: Arc<dyn SessionStore>) -> Self {
         Self {
             session_id,
             conversation_id: None,
@@ -86,10 +83,7 @@ pub trait ContextProvider: Send + Sync {
     /// 收集上下文数据
     ///
     /// 返回一个或多个 ContextSegment。返回空 Vec 表示该 Provider 无数据可提供。
-    async fn collect(
-        &self,
-        ctx: &ProviderContext,
-    ) -> ContextResult<Vec<ContextSegment>>;
+    async fn collect(&self, ctx: &ProviderContext) -> ContextResult<Vec<ContextSegment>>;
 
     /// 是否启用（可根据配置动态控制）
     fn enabled(&self) -> bool {

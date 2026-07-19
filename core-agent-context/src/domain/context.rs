@@ -8,6 +8,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::slot::ContextSlot;
@@ -21,6 +22,8 @@ pub enum ContextSource {
     System,
     /// 用户来源
     User,
+    /// 对话历史来源
+    Conversation,
     /// 插件来源
     Plugin,
     /// 工作空间来源
@@ -34,10 +37,12 @@ pub enum ContextSource {
 }
 
 impl ContextSource {
+    /// 返回稳定的大写来源名。
     pub fn as_str(&self) -> &'static str {
         match self {
             ContextSource::System => "SYSTEM",
             ContextSource::User => "USER",
+            ContextSource::Conversation => "CONVERSATION",
             ContextSource::Plugin => "PLUGIN",
             ContextSource::Workspace => "WORKSPACE",
             ContextSource::Memory => "MEMORY",
@@ -114,6 +119,9 @@ pub struct Context {
     pub session_id: Uuid,
     /// 关联 Conversation ID（可选）
     pub conversation_id: Option<Uuid>,
+    /// Reducer 输出的有序片段，保留 Provider 来源、Slot 与元数据，供 Inspector/Audit 使用
+    #[serde(default)]
+    pub segments: Vec<ContextSegment>,
     /// 系统上下文
     pub system: super::system_context::SystemContext,
     /// 对话上下文
@@ -126,6 +134,9 @@ pub struct Context {
     pub environment: super::environment_context::EnvironmentContext,
     /// 插件上下文
     pub plugin: super::plugin_context::PluginContext,
+    /// 工具结果上下文
+    #[serde(default)]
+    pub tool: super::tool_context::ToolContext,
     /// 用户上下文
     pub user: super::user_context::UserContext,
     /// 总 Token 数
@@ -138,6 +149,53 @@ pub struct Context {
     pub hash: String,
     /// 构建耗时（毫秒）
     pub build_duration_ms: u64,
+}
+
+impl Context {
+    /// 计算语义哈希。
+    ///
+    /// 构建 ID、时间和耗时不属于上下文语义，因此不会影响哈希。
+    pub fn semantic_hash(&self) -> Result<String, serde_json::Error> {
+        let canonical_segments: Vec<_> = self
+            .segments
+            .iter()
+            .map(|segment| {
+                let metadata: std::collections::BTreeMap<_, _> = segment.metadata.iter().collect();
+                serde_json::json!({
+                    "source": segment.source.as_str(),
+                    "slot": segment.slot.as_str(),
+                    "content": segment.content,
+                    "token_count": segment.token_count,
+                    "priority": segment.priority,
+                    "required": segment.required,
+                    "metadata": metadata,
+                })
+            })
+            .collect();
+        let payload = serde_json::json!({
+            "session_id": self.session_id,
+            "conversation_id": self.conversation_id,
+            "segments": canonical_segments,
+            "system": self.system,
+            "conversation": self.conversation,
+            "workspace": self.workspace,
+            "memory": self.memory,
+            "environment": self.environment,
+            "plugin": self.plugin,
+            "tool": self.tool,
+            "user": self.user,
+            "total_tokens": self.total_tokens,
+            "token_distribution": self.token_distribution,
+        });
+        let encoded = serde_json::to_vec(&payload)?;
+        Ok(format!("{:x}", Sha256::digest(encoded)))
+    }
+
+    /// 刷新语义哈希。
+    pub fn refresh_hash(&mut self) -> Result<(), serde_json::Error> {
+        self.hash = self.semantic_hash()?;
+        Ok(())
+    }
 }
 
 /// Token 分布统计
@@ -166,14 +224,18 @@ impl TokenDistribution {
 
     /// 总 Token 数
     pub fn total(&self) -> u64 {
-        self.system
-            + self.conversation
-            + self.workspace
-            + self.memory
-            + self.environment
-            + self.plugin
-            + self.tool
-            + self.user
+        [
+            self.system,
+            self.conversation,
+            self.workspace,
+            self.memory,
+            self.environment,
+            self.plugin,
+            self.tool,
+            self.user,
+        ]
+        .into_iter()
+        .fold(0, u64::saturating_add)
     }
 }
 
@@ -247,6 +309,7 @@ mod tests {
     fn test_context_source_as_str() {
         assert_eq!(ContextSource::System.as_str(), "SYSTEM");
         assert_eq!(ContextSource::User.as_str(), "USER");
+        assert_eq!(ContextSource::Conversation.as_str(), "CONVERSATION");
         assert_eq!(ContextSource::Workspace.as_str(), "WORKSPACE");
     }
 }

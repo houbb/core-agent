@@ -52,9 +52,5 @@ pub trait ContextSnapshotStore: Send + Sync {
     async fn delete_snapshot(&self, id: &Uuid) -> ContextResult<()>;
 
     /// 清理过期快照（保留最近 N 条）
-    async fn prune_snapshots(
-        &self,
-        session_id: &Uuid,
-        keep_recent: usize,
-    ) -> ContextResult<usize>;
+    async fn prune_snapshots(&self, session_id: &Uuid, keep_recent: usize) -> ContextResult<usize>;
 }

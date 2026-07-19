@@ -7,6 +7,8 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::application::ContextApplicationService;
+use crate::application::ContextPipeline;
+use crate::domain::Context;
 use crate::dto::{BuildContextRequest, ContextResponse, ContextSnapshotResponse, ListResponse};
 use crate::error::ContextResult;
 use crate::infrastructure::ContextSnapshotStore;
@@ -50,6 +52,17 @@ impl<S: SessionStore + 'static> ContextRuntime<S> {
         Self { app }
     }
 
+    /// 使用自定义 Pipeline 创建 Runtime。
+    pub fn with_pipeline(
+        session_store: Arc<S>,
+        snapshot_store: Option<Arc<dyn ContextSnapshotStore>>,
+        pipeline: ContextPipeline,
+    ) -> Self {
+        Self {
+            app: ContextApplicationService::with_pipeline(session_store, snapshot_store, pipeline),
+        }
+    }
+
     // ── Context API ──
 
     /// 构建 Context
@@ -61,12 +74,18 @@ impl<S: SessionStore + 'static> ContextRuntime<S> {
         Ok(ContextResponse::from(&context))
     }
 
+    /// 构建并返回完整领域 Context，供 Model Runtime 等框架消费者直接使用。
+    pub async fn build(&self, req: BuildContextRequest) -> ContextResult<Context> {
+        self.app.build_context(req).await
+    }
+
     // ── Snapshot API ──
 
     /// 加载历史快照
     pub async fn load_snapshot(&self, id: &str) -> ContextResult<ContextSnapshotResponse> {
-        let uid = Uuid::parse_str(id)
-            .map_err(|_| crate::error::ContextError::InvalidArgument("Invalid snapshot id".into()))?;
+        let uid = Uuid::parse_str(id).map_err(|_| {
+            crate::error::ContextError::InvalidArgument("Invalid snapshot id".into())
+        })?;
         let snapshot = self.app.load_snapshot(&uid).await?;
         Ok(ContextSnapshotResponse {
             id: snapshot.id.to_string(),
@@ -78,6 +97,14 @@ impl<S: SessionStore + 'static> ContextRuntime<S> {
         })
     }
 
+    /// 加载完整 Context 快照，用于 Replay、Debug 和 Audit。
+    pub async fn load_context_snapshot(&self, id: &str) -> ContextResult<Context> {
+        let uid = Uuid::parse_str(id).map_err(|_| {
+            crate::error::ContextError::InvalidArgument("Invalid snapshot id".into())
+        })?;
+        self.app.load_snapshot(&uid).await
+    }
+
     /// 列出某 Session 的所有快照
     pub async fn list_snapshots(
         &self,
@@ -85,8 +112,9 @@ impl<S: SessionStore + 'static> ContextRuntime<S> {
         offset: u64,
         limit: u64,
     ) -> ContextResult<ListResponse<ContextSnapshotResponse>> {
-        let sid = Uuid::parse_str(session_id)
-            .map_err(|_| crate::error::ContextError::InvalidArgument("Invalid session id".into()))?;
+        let sid = Uuid::parse_str(session_id).map_err(|_| {
+            crate::error::ContextError::InvalidArgument("Invalid session id".into())
+        })?;
         let (snapshots, total) = self.app.list_snapshots(&sid, offset, limit).await?;
         Ok(ListResponse {
             items: snapshots
@@ -105,8 +133,9 @@ impl<S: SessionStore + 'static> ContextRuntime<S> {
         session_id: &str,
         keep_recent: usize,
     ) -> ContextResult<usize> {
-        let sid = Uuid::parse_str(session_id)
-            .map_err(|_| crate::error::ContextError::InvalidArgument("Invalid session id".into()))?;
+        let sid = Uuid::parse_str(session_id).map_err(|_| {
+            crate::error::ContextError::InvalidArgument("Invalid session id".into())
+        })?;
         self.app.prune_snapshots(&sid, keep_recent).await
     }
 }
@@ -115,8 +144,7 @@ impl<S: SessionStore + 'static> ContextRuntime<S> {
 mod tests {
     use super::*;
     use core_agent_session::{
-        Conversation, Message, MessageRole, Session, SessionState,
-        SqliteSessionStore,
+        Conversation, Message, MessageRole, Session, SessionState, SqliteSessionStore,
     };
 
     #[tokio::test]
@@ -152,6 +180,7 @@ mod tests {
         assert_eq!(resp.session_id, session.id.to_string());
         assert!(resp.total_tokens > 0);
         assert!(resp.user.has_input);
+        assert_eq!(resp.context.conversation.messages.len(), 3);
         assert!(!resp.hash.is_empty());
     }
 }

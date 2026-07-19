@@ -3,6 +3,27 @@ resolver = "2"
 members = [
     "core-agent-session",
     "core-agent-context",
+    "core-agent-model",
+    "core-agent-tool",
+    "core-agent-workspace",
+    "core-agent-plan",
+    "core-agent-execution",
+    "core-agent-agent",
+    "core-agent-memory",
+    "core-agent-event",
+    "core-agent-workflow",
+    "core-agent-multi",
+    "core-agent-extension",
+    "core-agent-platform",
+    "core-agent-kernel",
+    "core-agent-app",
+    "agent-cli",
+    "agent-desktop/src-tauri",
+    "core-agent-visual",
+    "core-agent-collaboration",
+    "core-agent-governance",
+    "core-agent-ecosystem",
+    "core-agent-protocol",
 ]
 
 [workspace.package]
@@ -22,3 +43,34 @@ description = "Enterprise Agent Runtime — Agent Operating System"
 [dependencies]
 core-agent-session = { path = "core-agent-session" }
 core-agent-context = { path = "core-agent-context" }
+core-agent-model = { path = "core-agent-model" }
+core-agent-tool = { path = "core-agent-tool" }
+core-agent-workspace = { path = "core-agent-workspace" }
+core-agent-plan = { path = "core-agent-plan" }
+core-agent-execution = { path = "core-agent-execution" }
+core-agent-agent = { path = "core-agent-agent" }
+core-agent-memory = { path = "core-agent-memory" }
+core-agent-event = { path = "core-agent-event" }
+core-agent-workflow = { path = "core-agent-workflow" }
+core-agent-multi = { path = "core-agent-multi" }
+core-agent-extension = { path = "core-agent-extension" }
+core-agent-platform = { path = "core-agent-platform" }
+core-agent-kernel = { path = "core-agent-kernel" }
+core-agent-app = { path = "core-agent-app" }
+core-agent-visual = { path = "core-agent-visual" }
+core-agent-collaboration = { path = "core-agent-collaboration" }
+core-agent-governance = { path = "core-agent-governance" }
+core-agent-ecosystem = { path = "core-agent-ecosystem" }
+core-agent-protocol = { path = "core-agent-protocol" }
+async-trait = "0.1"
+chrono = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "process", "sync", "time"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

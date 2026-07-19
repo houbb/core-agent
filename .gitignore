@@ -69,6 +69,8 @@ dist/
 
 #AI
 ./.claude
+.agent/
+.core-agent-live-e2e
 
 # code-graph
 .codegraph
@@ -103,3 +105,4 @@ distribution/
 # Added by cargo
 
 /target
+nul

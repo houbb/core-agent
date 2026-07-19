@@ -1,7 +1,8 @@
 //! SQLite Schema 定义
 //!
 //! 五张表：session / conversation / message / attachment / manifest
-//! 每个表必须有 id / create_time / update_time + 合适索引。禁止外键。
+//! 每个表包含 id / create_time / update_time / create_user / update_user。
+//! SQLite 不使用外键，关系完整性由 Runtime 校验。
 
 /// 建表 DDL
 pub const SCHEMA_SQL: &str = r#"
@@ -16,7 +17,11 @@ CREATE TABLE IF NOT EXISTS session (
     last_active_at  TEXT NOT NULL,
     owner           TEXT,
     workspace_id    TEXT,
-    metadata        TEXT NOT NULL DEFAULT '{}'
+    metadata        TEXT NOT NULL DEFAULT '{}',
+    create_time     TEXT NOT NULL DEFAULT '',
+    update_time     TEXT NOT NULL DEFAULT '',
+    create_user     TEXT NOT NULL DEFAULT 'system',
+    update_user     TEXT NOT NULL DEFAULT 'system'
 );
 
 CREATE INDEX IF NOT EXISTS idx_session_state ON session(state);
@@ -29,7 +34,11 @@ CREATE TABLE IF NOT EXISTS conversation (
     session_id          TEXT NOT NULL,
     conversation_type   TEXT NOT NULL DEFAULT 'MAIN',
     name                TEXT,
-    created_at          TEXT NOT NULL
+    created_at          TEXT NOT NULL,
+    create_time         TEXT NOT NULL DEFAULT '',
+    update_time         TEXT NOT NULL DEFAULT '',
+    create_user         TEXT NOT NULL DEFAULT 'system',
+    update_user         TEXT NOT NULL DEFAULT 'system'
 );
 
 CREATE INDEX IF NOT EXISTS idx_conversation_session ON conversation(session_id);
@@ -42,7 +51,11 @@ CREATE TABLE IF NOT EXISTS message (
     content             TEXT NOT NULL,
     status              TEXT NOT NULL DEFAULT 'PENDING',
     created_at          TEXT NOT NULL,
-    metadata            TEXT NOT NULL DEFAULT '{}'
+    metadata            TEXT NOT NULL DEFAULT '{}',
+    create_time         TEXT NOT NULL DEFAULT '',
+    update_time         TEXT NOT NULL DEFAULT '',
+    create_user         TEXT NOT NULL DEFAULT 'system',
+    update_user         TEXT NOT NULL DEFAULT 'system'
 );
 
 CREATE INDEX IF NOT EXISTS idx_message_conversation ON message(conversation_id);
@@ -60,7 +73,11 @@ CREATE TABLE IF NOT EXISTS attachment (
     storage_path        TEXT,
     content             BLOB,
     created_at          TEXT NOT NULL,
-    metadata            TEXT NOT NULL DEFAULT '{}'
+    metadata            TEXT NOT NULL DEFAULT '{}',
+    create_time         TEXT NOT NULL DEFAULT '',
+    update_time         TEXT NOT NULL DEFAULT '',
+    create_user         TEXT NOT NULL DEFAULT 'system',
+    update_user         TEXT NOT NULL DEFAULT 'system'
 );
 
 CREATE INDEX IF NOT EXISTS idx_attachment_message ON attachment(message_id);
@@ -81,7 +98,11 @@ CREATE TABLE IF NOT EXISTS manifest (
     token_count             INTEGER,
     last_conversation_id    TEXT,
     created_at              TEXT NOT NULL,
-    updated_at              TEXT NOT NULL
+    updated_at              TEXT NOT NULL,
+    create_time             TEXT NOT NULL DEFAULT '',
+    update_time             TEXT NOT NULL DEFAULT '',
+    create_user             TEXT NOT NULL DEFAULT 'system',
+    update_user             TEXT NOT NULL DEFAULT 'system'
 );
 
 CREATE INDEX IF NOT EXISTS idx_manifest_session ON manifest(session_id);

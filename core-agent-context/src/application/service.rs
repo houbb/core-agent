@@ -11,8 +11,8 @@ use uuid::Uuid;
 use crate::application::composer::DefaultComposer;
 use crate::application::pipeline::ContextPipeline;
 use crate::application::reducer::SummaryReducer;
-use crate::dto::BuildContextRequest;
 use crate::domain::context::Context;
+use crate::dto::BuildContextRequest;
 use crate::error::{ContextError, ContextResult};
 use crate::infrastructure::{
     ContextSnapshotMeta, ContextSnapshotStore, ProviderContext, ReducerConfig,
@@ -21,6 +21,10 @@ use crate::persistence::providers::{
     ConversationProvider, EnvironmentProvider, SystemProvider, UserProvider,
 };
 use core_agent_session::SessionStore;
+use core_agent_session::{ConversationType, SessionState};
+
+const DEFAULT_MAX_MESSAGES: usize = 20;
+const DEFAULT_MAX_TOKENS: u64 = 128_000;
 
 /// ContextApplicationService — Context Runtime 的核心用例编排器
 pub struct ContextApplicationService<S: SessionStore> {
@@ -76,9 +80,60 @@ impl<S: SessionStore + 'static> ContextApplicationService<S> {
             .conversation_id
             .as_ref()
             .map(|s| {
-                Uuid::parse_str(s).map_err(|_| ContextError::InvalidArgument("Invalid conversation_id".into()))
+                Uuid::parse_str(s)
+                    .map_err(|_| ContextError::InvalidArgument("Invalid conversation_id".into()))
             })
             .transpose()?;
+
+        let session = self
+            .session_store
+            .get_session(&session_id)
+            .await?
+            .ok_or_else(|| ContextError::NotFound(format!("Session {}", session_id)))?;
+        if session.state == SessionState::Deleted {
+            return Err(ContextError::InvalidArgument(format!(
+                "Session {} is deleted",
+                session_id
+            )));
+        }
+
+        let conversation_id = match conversation_id {
+            Some(id) => {
+                let conversation = self
+                    .session_store
+                    .get_conversation(&id)
+                    .await?
+                    .ok_or_else(|| ContextError::NotFound(format!("Conversation {}", id)))?;
+                if conversation.session_id != session_id {
+                    return Err(ContextError::InvalidArgument(format!(
+                        "Conversation {} does not belong to Session {}",
+                        id, session_id
+                    )));
+                }
+                id
+            }
+            None => self
+                .session_store
+                .list_conversations(&session_id)
+                .await?
+                .into_iter()
+                .find(|conversation| conversation.conversation_type == ConversationType::Main)
+                .map(|conversation| conversation.id)
+                .ok_or_else(|| {
+                    ContextError::NotFound(format!(
+                        "No MAIN conversation found for Session {}",
+                        session_id
+                    ))
+                })?,
+        };
+
+        let max_messages = req.max_messages.unwrap_or(DEFAULT_MAX_MESSAGES);
+        let reducer_config = ReducerConfig {
+            max_total_tokens: req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
+            keep_recent_messages: max_messages,
+            enable_summary: false,
+            ..ReducerConfig::default()
+        };
 
         // 构建 ProviderContext
         let mut extensions = HashMap::new();
@@ -91,18 +146,23 @@ impl<S: SessionStore + 'static> ContextApplicationService<S> {
 
         let provider_ctx = ProviderContext {
             session_id,
-            conversation_id,
+            conversation_id: Some(conversation_id),
             session_store: self.session_store.clone() as Arc<dyn SessionStore>,
             system_prompt: req.system_prompt.clone(),
             working_directory: req.working_directory.clone(),
-            max_messages: req.max_messages,
+            max_messages: Some(max_messages),
             extensions,
         };
 
         // 执行 Pipeline
         let context = self
             .pipeline
-            .execute(session_id, conversation_id, &provider_ctx)
+            .execute_with_config(
+                session_id,
+                Some(conversation_id),
+                &provider_ctx,
+                &reducer_config,
+            )
             .await?;
 
         // 如果配置了 snapshot_store，额外保存
@@ -162,8 +222,7 @@ impl<S: SessionStore + 'static> ContextApplicationService<S> {
 mod tests {
     use super::*;
     use core_agent_session::{
-        Conversation, Message, MessageRole, Session, SessionState,
-        SqliteSessionStore,
+        Conversation, Message, MessageRole, Session, SessionState, SqliteSessionStore,
     };
 
     #[tokio::test]

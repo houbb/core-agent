@@ -73,10 +73,29 @@ impl Manifest {
     }
 
     /// 更新统计信息
-    pub fn update_stats(&mut self, conversation_count: u32, message_count: u32, token_count: Option<u64>) {
+    pub fn update_stats(
+        &mut self,
+        conversation_count: u32,
+        message_count: u32,
+        token_count: Option<u64>,
+    ) {
         self.conversation_count = conversation_count;
         self.message_count = message_count;
         self.token_count = token_count;
+        self.updated_at = Utc::now();
+    }
+
+    /// 同步 Session 概要，但保留已经计算的统计信息。
+    pub fn sync_session(&mut self, session: &super::session::Session) {
+        self.name = session.title.clone();
+        self.model = session.metadata.get("model");
+        self.workspace_path = session.metadata.get("workspace_path");
+        self.tags = session
+            .metadata
+            .get::<Vec<String>>("tags")
+            .unwrap_or_default();
+        self.state = session.state;
+        self.last_active_at = session.last_active_at;
         self.updated_at = Utc::now();
     }
 

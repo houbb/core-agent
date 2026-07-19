@@ -2,9 +2,9 @@
 //!
 //! context_snapshot 表 + SqliteContextSnapshotStore + 4 个内置 Provider
 
+pub mod providers;
 mod schema;
 mod store;
-pub mod providers;
 
 pub use schema::*;
 pub use store::SqliteContextSnapshotStore;

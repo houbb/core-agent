@@ -2,7 +2,7 @@
 //!
 //! Session Runtime 所有错误通过此模块定义。
 
-use crate::domain::session::SessionStateError;
+use crate::domain::{message::MessageStatusError, session::SessionStateError};
 
 /// Session Runtime 错误类型
 #[derive(Debug, thiserror::Error)]
@@ -18,6 +18,10 @@ pub enum SessionError {
     /// 非法状态转换
     #[error("Invalid state transition: {0}")]
     InvalidState(#[from] SessionStateError),
+
+    /// 非法消息状态转换
+    #[error("Invalid message status transition: {0}")]
+    InvalidMessageStatus(#[from] MessageStatusError),
 
     /// 非法参数
     #[error("Invalid argument: {0}")]
