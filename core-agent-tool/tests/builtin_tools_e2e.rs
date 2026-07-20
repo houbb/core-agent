@@ -27,13 +27,13 @@ async fn allow_all(store: &SqliteToolStore, manager: &ToolManager) {
 }
 
 #[tokio::test]
-async fn builtin_provider_registers_all_44_tools() {
+async fn builtin_provider_registers_all_69_tools() {
     let (manager, _store) = setup_manager();
     let count = manager.load_provider(&BuiltinToolProvider::new()).await.unwrap();
-    assert_eq!(count, 44, "Should register exactly 44 builtin tools");
+    assert_eq!(count, 69, "Should register exactly 69 builtin tools");
 
     let tools = manager.list().await.unwrap();
-    assert_eq!(tools.len(), 44, "Catalog should have 44 tools");
+    assert_eq!(tools.len(), 69, "Catalog should have 69 tools");
 
     // Verify provider was stored
     let provider = _store.find_provider("builtin").await.unwrap().unwrap();
@@ -91,6 +91,17 @@ async fn tools_have_correct_capabilities() {
         &ToolCapability::new("lsp").unwrap(), true
     ).await.unwrap();
     assert_eq!(lsp_tools.len(), 6, "Should have 6 lsp tools");
+
+    // By new categories
+    let ast_tools = manager.find_by_capability(
+        &ToolCapability::new("ast").unwrap(), true
+    ).await.unwrap();
+    assert_eq!(ast_tools.len(), 2, "Should have 2 ast tools");
+
+    let code_index_tools = manager.find_by_capability(
+        &ToolCapability::new("code-index").unwrap(), true
+    ).await.unwrap();
+    assert_eq!(code_index_tools.len(), 2, "Should have 2 code_index tools");
 
     // By specific capability
     let read_tools = manager.find_by_capability(

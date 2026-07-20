@@ -1,6 +1,36 @@
 # CHANGELOG
 
-## [0.35.0] - 2026-07-20
+## [0.36.0] - 2026-07-20
+
+### P036: Tools 增强 — 代码智能 + 工程理解 + 运维/企业/AI 工具
+
+在 44 个基础工具之上，按设计文档 036-tools-enhance.md 实现 Phase 1~5 共 ~31 个新工具，工具总数达到 **75 个**：
+
+- **Phase 1: 代码智能工具（12 个新增+增强）**
+  - `ast.search` / `ast.replace` — 基于正则的 AST 感知代码搜索和替换，支持 20+ 编程语言过滤
+  - `code_index.index` / `code_index.query` — 符号索引，支持 Java/Rust/Python/TS/Go 等语言的类、方法、字段提取
+  - `dependency.inspect` — 依赖分析，支持 Java(Maven/Gradle)、Rust(Cargo)、Node.js(npm)、Python(pip)
+  - `decompiler.decompile` — Java 反编译，支持 .class 文件和 .jar 归档，使用 javap
+  - LSP 6 个工具从 stub 升级为真实实现：definition/references/hover/completion/diagnostics/symbols，使用 grep 增强搜索
+
+- **Phase 2: 工程理解工具（4 个新增）**
+  - `project.analyzer` — 项目结构分析，识别构建系统和框架
+  - `architecture.graph` — 架构依赖图，支持 JSON/text 输出
+  - `callgraph.query` — 函数调用链分析
+  - `api.analyzer` — REST API 端点扫描，支持 Spring Boot/JAX-RS/Express/Actix
+
+- **Phase 3: 运维工具（5 个 stub）**
+  - `log.query` / `metric.query` / `trace.query` / `cmdb.query` / `k8s.query` — 预留 ELK/Prometheus/Jaeger/CMDB/K8s 接口
+
+- **Phase 4: 企业工具（5 个 stub）**
+  - `knowledge.search` / `ticket.create` / `notification.send` / `browser.navigate` / `browser.screenshot` — 预留知识库/工单/通知/浏览器接口
+
+- **Phase 5: AI 工具（5 个 stub）**
+  - `code.review` / `test.generate` / `security.scan` / `data.analyze` / `vision.analyze` — 预留代码审查/测试生成/安全扫描/数据分析/视觉接口
+
+- 139 个测试全部通过（113 个单元测试 + 16 个 E2E + 10 个 Runtime 集成测试）
+- 新增 `RawToolOutput::json()` 方法，支持 JSON 格式输出
+- 架构完全遵循已有模式：每个工具独立 struct + 单元测试，通过 BuiltinToolProvider 注册
 
 ### P035: 内置工具体系 — 44 个插件化工具，博采众长
 

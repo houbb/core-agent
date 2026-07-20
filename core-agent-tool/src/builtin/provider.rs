@@ -19,6 +19,14 @@ use super::agent::*;
 use super::plan::*;
 use super::cron::*;
 use super::lsp::*;
+use super::ast::*;
+use super::code_index::*;
+use super::dependency::*;
+use super::decompiler::*;
+use super::project::*;
+use super::runtime::*;
+use super::enterprise::*;
+use super::ai::*;
 
 /// Provider that registers all 41 builtin tools.
 pub struct BuiltinToolProvider {
@@ -525,6 +533,269 @@ impl BuiltinToolProvider {
                 "query": {"type": "string", "description": "Symbol query"}
             }), vec!["query"]),
             lsp_symbols_tool(), &["lsp", "lsp.symbols"],
+        ));
+
+        // === AST Tools (2) ===
+        tools.push(Self::tool(
+            "ast.search", "Search code using AST-aware patterns with language filtering.",
+            "ast", PermissionDecision::Allow, 30_000,
+            file_schema(serde_json::json!({
+                "pattern": {"type": "string", "description": "Regex pattern to search"},
+                "language": {"type": "string", "description": "Programming language filter (java, rust, python, ts, go, etc.)", "default": "all"},
+                "path": {"type": "string", "description": "Search directory"}
+            }), vec!["pattern"]),
+            ast_search_tool(), &["ast", "ast.search"],
+        ));
+
+        tools.push(Self::tool(
+            "ast.replace", "Replace code patterns with rewrite templates.",
+            "ast", PermissionDecision::Allow, 30_000,
+            file_schema(serde_json::json!({
+                "pattern": {"type": "string", "description": "Regex pattern to match"},
+                "rewrite": {"type": "string", "description": "Replacement text"},
+                "language": {"type": "string", "description": "Programming language filter", "default": "all"},
+                "path": {"type": "string", "description": "Search directory"},
+                "dry_run": {"type": "boolean", "description": "Preview changes without applying", "default": false}
+            }), vec!["pattern", "rewrite"]),
+            ast_replace_tool(), &["ast", "ast.replace"],
+        ));
+
+        // === Code Index Tools (2) ===
+        tools.push(Self::tool(
+            "code_index.index", "Scan directory and extract symbols (classes, methods, fields).",
+            "code_index", PermissionDecision::Allow, 30_000,
+            file_schema(serde_json::json!({
+                "path": {"type": "string", "description": "Directory to scan"},
+                "language": {"type": "string", "description": "Programming language", "default": "all"}
+            }), vec![]),
+            code_index_index_tool(), &["code-index", "code-index.index"],
+        ));
+
+        tools.push(Self::tool(
+            "code_index.query", "Query symbols from the code index by name.",
+            "code_index", PermissionDecision::Allow, 30_000,
+            file_schema(serde_json::json!({
+                "symbol": {"type": "string", "description": "Symbol name to search"},
+                "kind": {"type": "string", "description": "Symbol kind (class, method, field, all)", "default": "all"},
+                "path": {"type": "string", "description": "Search directory"},
+                "language": {"type": "string", "description": "Programming language", "default": "all"}
+            }), vec!["symbol"]),
+            code_index_query_tool(), &["code-index", "code-index.query"],
+        ));
+
+        // === Dependency Tools (1) ===
+        tools.push(Self::tool(
+            "dependency.inspect", "Inspect project dependencies for various languages.",
+            "dependency", PermissionDecision::Allow, 60_000,
+            file_schema(serde_json::json!({
+                "path": {"type": "string", "description": "Project directory"},
+                "language": {"type": "string", "description": "Language (java, rust, node, python, auto)", "default": "auto"}
+            }), vec![]),
+            dependency_inspect_tool(), &["dependency", "dependency.inspect"],
+        ));
+
+        // === Decompiler Tools (1) ===
+        tools.push(Self::tool(
+            "decompiler.decompile", "Decompile Java class files or JAR archives.",
+            "decompiler", PermissionDecision::Allow, 30_000,
+            file_schema(serde_json::json!({
+                "path": {"type": "string", "description": "Path to .class or .jar file"},
+                "class": {"type": "string", "description": "Specific class name to decompile from JAR"},
+                "verbose": {"type": "boolean", "description": "Verbose output", "default": false}
+            }), vec!["path"]),
+            decompiler_decompile_tool(), &["decompiler", "decompiler.decompile"],
+        ));
+
+        // === Project Tools (4) ===
+        tools.push(Self::tool(
+            "project.analyzer", "Analyze project structure and identify framework.",
+            "project", PermissionDecision::Allow, 30_000,
+            file_schema(serde_json::json!({
+                "path": {"type": "string", "description": "Project directory"}
+            }), vec![]),
+            project_analyzer_tool(), &["project", "project.analyzer"],
+        ));
+
+        tools.push(Self::tool(
+            "architecture.graph", "Generate architecture dependency graph in JSON/text.",
+            "project", PermissionDecision::Allow, 30_000,
+            file_schema(serde_json::json!({
+                "path": {"type": "string", "description": "Project directory"},
+                "format": {"type": "string", "enum": ["json", "text"], "default": "json"}
+            }), vec![]),
+            architecture_graph_tool(), &["architecture", "architecture.graph"],
+        ));
+
+        tools.push(Self::tool(
+            "callgraph.query", "Analyze function call relationships.",
+            "project", PermissionDecision::Allow, 30_000,
+            file_schema(serde_json::json!({
+                "function": {"type": "string", "description": "Function name to trace"},
+                "path": {"type": "string", "description": "Search directory"},
+                "depth": {"type": "integer", "description": "Max call depth", "minimum": 1, "maximum": 10, "default": 3}
+            }), vec!["function"]),
+            callgraph_query_tool(), &["callgraph", "callgraph.query"],
+        ));
+
+        tools.push(Self::tool(
+            "api.analyzer", "Analyze REST API endpoints in a project.",
+            "project", PermissionDecision::Allow, 30_000,
+            file_schema(serde_json::json!({
+                "path": {"type": "string", "description": "Project directory"},
+                "language": {"type": "string", "description": "Language (java, node, rust, auto)", "default": "auto"}
+            }), vec![]),
+            api_analyzer_tool(), &["api", "api.analyzer"],
+        ));
+
+        // === Runtime/Observability Tools (5, stub) ===
+        tools.push(Self::tool(
+            "log.query", "Query logs from ELK/Loki/ClickHouse. (Requires configuration)",
+            "runtime", PermissionDecision::Deny, 30_000,
+            file_schema(serde_json::json!({
+                "query": {"type": "string", "description": "Log query string"},
+                "time_range": {"type": "string", "description": "Time range (e.g. 1h, 24h)"}
+            }), vec![]),
+            log_query_tool(), &["observability", "log.query"],
+        ));
+
+        tools.push(Self::tool(
+            "metric.query", "Query metrics from Prometheus. (Requires configuration)",
+            "runtime", PermissionDecision::Deny, 30_000,
+            file_schema(serde_json::json!({
+                "query": {"type": "string", "description": "PromQL query"},
+                "time_range": {"type": "string", "description": "Time range"}
+            }), vec![]),
+            metric_query_tool(), &["observability", "metric.query"],
+        ));
+
+        tools.push(Self::tool(
+            "trace.query", "Query traces from Jaeger/SkyWalking. (Requires configuration)",
+            "runtime", PermissionDecision::Deny, 30_000,
+            file_schema(serde_json::json!({
+                "trace_id": {"type": "string", "description": "Trace ID to query"},
+                "service": {"type": "string", "description": "Service name filter"}
+            }), vec![]),
+            trace_query_tool(), &["observability", "trace.query"],
+        ));
+
+        tools.push(Self::tool(
+            "cmdb.query", "Query CMDB for service/instance/owner info. (Requires configuration)",
+            "runtime", PermissionDecision::Deny, 30_000,
+            file_schema(serde_json::json!({
+                "query": {"type": "string", "description": "Search query"},
+                "type": {"type": "string", "description": "Entity type (service, instance, owner)", "default": "service"}
+            }), vec![]),
+            cmdb_query_tool(), &["cmdb", "cmdb.query"],
+        ));
+
+        tools.push(Self::tool(
+            "k8s.query", "Query Kubernetes resources. (Requires kubectl)",
+            "runtime", PermissionDecision::Deny, 30_000,
+            file_schema(serde_json::json!({
+                "resource": {"type": "string", "description": "K8s resource type (pods, deployments, services)", "default": "pods"},
+                "namespace": {"type": "string", "description": "K8s namespace", "default": "default"}
+            }), vec![]),
+            k8s_query_tool(), &["k8s", "k8s.query"],
+        ));
+
+        // === Enterprise Tools (4, stub) ===
+        tools.push(Self::tool(
+            "knowledge.search", "Search knowledge base / Vector DB / Wiki. (Requires configuration)",
+            "enterprise", PermissionDecision::Deny, 30_000,
+            file_schema(serde_json::json!({
+                "query": {"type": "string", "description": "Search query"}
+            }), vec!["query"]),
+            knowledge_search_tool(), &["knowledge", "knowledge.search"],
+        ));
+
+        tools.push(Self::tool(
+            "ticket.create", "Create a ticket in Jira/ServiceNow. (Requires configuration)",
+            "enterprise", PermissionDecision::Deny, 30_000,
+            file_schema(serde_json::json!({
+                "title": {"type": "string", "description": "Ticket title"},
+                "description": {"type": "string", "description": "Ticket description"},
+                "priority": {"type": "string", "description": "Priority (low, medium, high, critical)", "default": "medium"}
+            }), vec!["title"]),
+            ticket_create_tool(), &["ticket", "ticket.create"],
+        ));
+
+        tools.push(Self::tool(
+            "notification.send", "Send notification via Slack/DingTalk/Email. (Requires configuration)",
+            "enterprise", PermissionDecision::Deny, 30_000,
+            file_schema(serde_json::json!({
+                "channel": {"type": "string", "description": "Notification channel"},
+                "message": {"type": "string", "description": "Message content"}
+            }), vec!["message"]),
+            notification_send_tool(), &["notification", "notification.send"],
+        ));
+
+        tools.push(Self::tool(
+            "browser.navigate", "Navigate to a URL using browser automation. (Requires Playwright)",
+            "enterprise", PermissionDecision::Deny, 30_000,
+            file_schema(serde_json::json!({
+                "url": {"type": "string", "description": "URL to navigate to"}
+            }), vec!["url"]),
+            browser_navigate_tool(), &["browser", "browser.navigate"],
+        ));
+
+        tools.push(Self::tool(
+            "browser.screenshot", "Take a screenshot of a page. (Requires Playwright)",
+            "enterprise", PermissionDecision::Deny, 30_000,
+            file_schema(serde_json::json!({
+                "url": {"type": "string", "description": "URL to screenshot"}
+            }), vec!["url"]),
+            browser_screenshot_tool(), &["browser", "browser.screenshot"],
+        ));
+
+        // === AI Tools (5, stub) ===
+        tools.push(Self::tool(
+            "code.review", "Review code changes for quality and security. (Requires LLM/SAST)",
+            "ai", PermissionDecision::Deny, 60_000,
+            file_schema(serde_json::json!({
+                "path": {"type": "string", "description": "File or directory to review"},
+                "diff": {"type": "boolean", "description": "Review against git diff", "default": false}
+            }), vec![]),
+            code_review_tool(), &["ai", "code.review"],
+        ));
+
+        tools.push(Self::tool(
+            "test.generate", "Generate unit/integration tests. (Requires LLM)",
+            "ai", PermissionDecision::Deny, 60_000,
+            file_schema(serde_json::json!({
+                "path": {"type": "string", "description": "Source file path"},
+                "framework": {"type": "string", "description": "Test framework", "default": "auto"}
+            }), vec![]),
+            test_generate_tool(), &["ai", "test.generate"],
+        ));
+
+        tools.push(Self::tool(
+            "security.scan", "Scan code for security vulnerabilities. (Requires Semgrep/SonarQube)",
+            "ai", PermissionDecision::Deny, 60_000,
+            file_schema(serde_json::json!({
+                "path": {"type": "string", "description": "Path to scan"},
+                "severity": {"type": "string", "description": "Minimum severity", "default": "all"}
+            }), vec![]),
+            security_scan_tool(), &["ai", "security.scan"],
+        ));
+
+        tools.push(Self::tool(
+            "data.analyze", "Analyze data from SQL/CSV/Excel sources. (Requires configuration)",
+            "ai", PermissionDecision::Deny, 30_000,
+            file_schema(serde_json::json!({
+                "source": {"type": "string", "description": "Data source"},
+                "query": {"type": "string", "description": "Query or analysis request"}
+            }), vec![]),
+            data_analyze_tool(), &["ai", "data.analyze"],
+        ));
+
+        tools.push(Self::tool(
+            "vision.analyze", "Analyze images/screenshots using vision models. (Requires vision model)",
+            "ai", PermissionDecision::Deny, 30_000,
+            file_schema(serde_json::json!({
+                "image": {"type": "string", "description": "Image file path"},
+                "prompt": {"type": "string", "description": "Analysis prompt", "default": "Describe this image"}
+            }), vec![]),
+            vision_analyze_tool(), &["ai", "vision.analyze"],
         ));
 
         tools

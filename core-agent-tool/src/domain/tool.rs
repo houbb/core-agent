@@ -401,6 +401,13 @@ impl RawToolOutput {
             ..Self::default()
         }
     }
+
+    pub fn json(value: serde_json::Value) -> Self {
+        Self {
+            content: vec![ToolContent::Json(value)],
+            ..Self::default()
+        }
+    }
 }
 
 pub(crate) fn elapsed_ms(start: DateTime<Utc>, end: DateTime<Utc>) -> u64 {
