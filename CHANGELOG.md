@@ -1,5 +1,43 @@
 # CHANGELOG
 
+## [0.37.0] - 2026-07-20
+
+### P037: Context Annotation Runtime — 上下文注解/引用能力
+
+实现 `design-docs/037-context-comment.md` 定义的 Context Annotation 能力，用户可以选中文件、代码段或历史消息作为上下文补充，让 Agent 知道"看这里"。
+
+#### 核心模型
+
+- 新增 `context_reference` 领域模型：`ContextReference`、`ReferenceType`（File/Selection/Message）、`ReferenceLocator`、`ContextPackage`
+- 扩展 `ContextSource` 枚举：新增 `Reference` 变体
+- 扩展 `ContextSlot` 枚举：新增 `Reference` 槽位（优先级 25），位于 User 之后
+- 扩展 `Context` 结构体：新增 `references: Vec<ContextReference>` 字段
+- 扩展 `TokenDistribution`：新增 `reference: u64` 字段
+
+#### 持久化
+
+- 新增 `context_reference` SQLite 表：id/session_id/reference_type/locator/snapshot/metadata/created_at + 审计字段
+- 新增 `SqliteContextReferenceStore`：save/load/list/delete/clear 完整 CRUD，遵循 r2d2 + spawn_blocking 模式
+
+#### Provider 扩展
+
+- `UserProvider`：解析 File 和 Selection 引用，从文件系统读取行范围内容
+- `ConversationProvider`：解析 Message 引用，从 SessionStore 按 ID 获取消息
+- `DefaultComposer`：处理 Reference Slot，将引用段反序列化为 `ContextReference` 写入 `Context.references`
+
+#### API & CLI
+
+- `ContextRuntime` 新增：`add_reference()` / `list_references()` / `delete_reference()` / `clear_references()`
+- `ContextApplicationService` 新增：`with_stores()` / `add_reference()` / `list_references()` / `delete_reference()` / `clear_references()`
+- 注册 `/comment` 和 `/context` 命令到 `InteractionCommandRegistry`
+- 新增 DTO：`AddReferenceRequest`、`ReferenceResponse`、`ReferenceSummary`
+
+#### 测试
+
+- 61 个单元测试通过（新增 context_reference + reference_store 单元测试）
+- 6 个端到端测试通过（新增 reference_round_trip_and_context_inclusion）
+- 全工作区编译通过，0 warning
+
 ## [0.36.0] - 2026-07-20
 
 ### P036: Tools 增强 — 代码智能 + 工程理解 + 运维/企业/AI 工具
