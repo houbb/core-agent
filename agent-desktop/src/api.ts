@@ -15,6 +15,7 @@ import type {
   UiPreference,
   ModelSetting,
   CompressionSetting,
+  ContextReference,
 } from "./types";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -26,6 +27,7 @@ export interface DesktopApi {
   openWorkspace(path: string): Promise<void>;
   searchContext(query: string, limit?: number): Promise<ContextCandidateSearch>;
   sendMessage(message: string, sessionId?: string): Promise<AgentSubmission>;
+  openFile(path: string, line?: number): Promise<void>;
   loadSession?(sessionId: string): Promise<ConversationItem[]>;
   loadSettings?(): Promise<SettingsSnapshot>;
   saveSettings?(request: {
@@ -114,6 +116,10 @@ export class TauriDesktopApi implements DesktopApi {
     };
   }
 
+  async openFile(path: string, line?: number): Promise<void> {
+    return invoke<void>("agent_open_file", { path, line });
+  }
+
   async subscribeApprovals(onRequest: (request: ApprovalRequest) => void): Promise<() => void> {
     return listen<ApprovalRequest>("agent-approval-required", (event) => onRequest(event.payload));
   }
@@ -171,6 +177,10 @@ export class HttpDesktopApi implements DesktopApi {
 
   async openWorkspace(_path: string): Promise<void> {
     throw new Error("Changing workspace is only available in the embedded desktop runtime.");
+  }
+
+  async openFile(path: string, line?: number): Promise<void> {
+    throw new Error("Opening files is only available in the embedded desktop runtime.");
   }
 
   async sendMessage(message: string, sessionId?: string): Promise<AgentSubmission> {

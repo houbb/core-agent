@@ -585,6 +585,19 @@ async fn agent_session_events(
 }
 
 #[tauri::command]
+async fn agent_open_file(
+    path: String,
+    line: Option<usize>,
+) -> DesktopResult<()> {
+    if path.trim().is_empty() || path.len() > 32_768 || path.contains('\0') {
+        return Err(DesktopError::Validation("file path is invalid".into()));
+    }
+    tauri_plugin_opener::open_path(&path, None::<&str>)
+        .map_err(|e| DesktopError::Agent(e.to_string()))?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn agent_open_workspace(
     state: tauri::State<'_, DesktopState>,
     path: String,
@@ -719,6 +732,7 @@ async fn open_desktop_runtime(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let directory = app.path().app_data_dir()?;
             std::fs::create_dir_all(&directory)?;
@@ -746,6 +760,7 @@ pub fn run() {
             list_preferences,
             save_preference,
             agent_context_candidates,
+            agent_open_file,
             agent_open_workspace,
             agent_load_workspace,
             agent_load_session,

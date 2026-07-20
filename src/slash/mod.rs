@@ -519,5 +519,6 @@ impl SlashCommandObserver for NoopSlashCommandObserver {
 
 // ── 命令模块导出 ──
 
+pub mod agent_plugin;
 pub mod commands;
 pub mod society_plugin;

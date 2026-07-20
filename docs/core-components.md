@@ -24,7 +24,7 @@
         │ Context / Memory / Reasoning │
         └──────────────┬───────────────┘
                        │
-              Capability Runtime
+              Capability Runtime  -- AGENTS.md 规范
         ┌──────────────▼───────────────┐
         │ Tools / Skills / MCP / APIs  │
         └──────────────┬───────────────┘

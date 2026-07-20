@@ -1,5 +1,84 @@
 # CHANGELOG
 
+## [0.39.1] - 2026-07-20
+
+### P039 Phase 5: `@` 上下文引用 UI 全面增强 — 对标 Claude Code
+
+实现 `design-docs/039-at-context-vs-cc.md` 定义的 `@` 上下文引用前端增强，补齐输出侧渲染和交互体验与 Claude Code 的差距。
+
+#### 🔴 输出侧文件路径可点击 + 文件跳转 (P0)
+
+- **Desktop 消息渲染** — `App.vue` 消息内容中的文件路径（`src/main.rs:42`）自动解析为可点击链接，点击通过系统默认编辑器打开文件
+- **Tauri opener 插件** — 新增 `tauri-plugin-opener` 依赖 + `agent_open_file` 命令，支持 `path` 和 `line` 参数
+- **CLI TUI 文件路径高亮** — `tui.rs` 新增 `parse_file_paths()` 函数，使用 `regex` 库匹配文件路径并以蓝色+下划线高亮显示
+
+#### 🔴 Context Chip 组件 (P0)
+
+- **`ContextChip.vue`** — 新组件，输入框上方显示当前引用的上下文（文件/选择/消息），支持图标、行号、删除按钮
+- **`ContextReference` 类型** — 前端类型定义，覆盖 FILE/SELECTION/MESSAGE 三种引用
+- **集成到 App.vue** — 输入框区域引入 Context Chip，支持删除和打开引用
+
+#### 🛠 架构变更
+
+- **Desktop API** — `DesktopApi` 接口新增 `openFile(path, line?)` 方法，`TauriDesktopApi` 和 `HttpDesktopApi` 分别实现（Http 端抛出友好提示）
+- **Controller** — `controller.ts` 新增 `openFile` 方法和 `contextReferences` 状态
+- **CLI 依赖** — `agent-cli/Cargo.toml` 新增 `regex` 依赖
+- **测试更新** — `controller.test.ts` 的 `FakeApi` 新增 `openFile` 桩方法
+
+#### 🔬 验证
+
+- `cargo check` 编译通过（agent-cli + agent-desktop）
+- `vue-tsc --noEmit` 类型检查通过
+- `vitest run` 8 个测试文件 22 个测试全部通过
+- `cargo test` 全部通过
+
+## [0.39.0] - 2026-07-20
+
+### P039 Phase 5: Agent 全面增强 — 对标 Claude Code / ChatGPT / OpenCode
+
+实现 `design-docs/039-agent-vs-cc.md` 定义的 Agent 全面增强，扩展 SubAgent Profile 从 3 个 → 9 个，新增工具集可配置和最大轮数可配置，新增 3 个 Slash 命令。
+
+#### 🧠 SubAgent Profile 扩展（3 → 9）
+
+| Profile | 工具集 | 最大轮数 | 用途 |
+|---------|--------|:--------:|------|
+| **General** | filesystem.read, guidance.read, memory.read, process.read | 4 | 通用委托任务 |
+| **Explore** | filesystem.read, guidance.read | 4 | 只读探索 |
+| **Review** | filesystem.read, guidance.read, memory.read | 4 | 代码审查 |
+| **Test** 🆕 | filesystem.*, process.*, guidance.read, memory.read, git.* | 8 | 测试分析/生成 |
+| **Debug** 🆕 | filesystem.read, process.*, git.*, memory.read | 8 | 错误诊断/根因分析 |
+| **SecurityReview** 🆕 | filesystem.read, guidance.read, memory.read, git.* | 6 | 安全漏洞审计 |
+| **Doc** 🆕 | filesystem.*, guidance.read, network.read, git.*, memory.read | 6 | 文档生成/更新 |
+| **Migration** 🆕 | filesystem.*, guidance.read, git.*, memory.read | 6 | 代码迁移/升级 |
+| **Architecture** 🆕 | filesystem.read, guidance.read, memory.read, git.* | 6 | 架构分析/设计评审 |
+
+#### 🛠 核心架构变更
+
+- **工具集可配置化** — `allowed_categories()` 方法支持通配符匹配（`filesystem.*`、`process.*`、`git.*`），不再硬编码 4 类只读工具
+- **最大轮数可配置化** — `max_turns()` 方法将硬编码 4 轮改为 Profile 级配置（Test/Debug 8 轮，SecurityReview/Doc/Migration/Architecture 6 轮）
+- **Profile 枚举扩展** — `SubAgentProfile` 从 3 个 → 9 个，保持 `Clone + Copy + Serialize/Deserialize`
+- **delegate_task tool 更新** — JSON Schema 的 profile enum 同步扩展为 9 个值
+
+#### 🆕 新 Slash 命令
+
+| 命令 | 路由 | 功能 |
+|------|------|------|
+| `/test` | SubAgent(Test) | 测试分析/生成/诊断 |
+| `/debug-agent` | SubAgent(Debug) | 错误诊断/根因分析 |
+| `/security-review` | SubAgent(SecurityReview) | 安全漏洞审计 |
+
+#### 📁 新增文件
+
+- `src/slash/commands/test.rs` — Test Agent 命令实现
+- `src/slash/commands/debug_agent.rs` — Debug Agent 命令实现
+- `src/slash/commands/security_review.rs` — Security Review Agent 命令实现
+- `src/slash/agent_plugin.rs` — Agent 命令注册插件（类似 `society_plugin.rs`）
+
+#### ✅ 测试验证
+
+- 7 个单元测试覆盖：所有 Profile 的 prompt 非空、工具集包含 filesystem 访问、max_turns 正确、parse 拒绝未知值、通配符匹配
+- 全量 lib 测试 94 个全部通过
+
 ## [0.38.4] - 2026-07-20
 
 ### P038 Phase 4: Agent Cognitive Runtime — 6 个认知命令

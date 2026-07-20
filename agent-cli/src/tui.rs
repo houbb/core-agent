@@ -640,12 +640,12 @@ fn render_messages(frame: &mut Frame<'_>, area: Rect, state: &mut TuiState) {
             label,
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         )));
-        lines.extend(
-            message
-                .text
-                .lines()
-                .map(|line| Line::from(format!("  {line}"))),
-        );
+        for line in message.text.lines() {
+            let spans = parse_file_paths(line);
+            let mut styled = vec![Span::raw("  ")];
+            styled.extend(spans);
+            lines.push(Line::from(styled));
+        }
         lines.push(Line::default());
     }
     let visible = area.height.saturating_sub(2) as usize;
@@ -664,6 +664,41 @@ fn render_messages(frame: &mut Frame<'_>, area: Rect, state: &mut TuiState) {
             .scroll((state.scroll, 0)),
         area,
     );
+}
+
+/// Parse a text line and return Spans with file paths highlighted in BLUE.
+/// Matches patterns like `path/to/file.rs`, `@path/to/file.rs`, `path/to/file.rs:42`.
+/// Uses regex for reliable pattern matching.
+fn parse_file_paths(text: &str) -> Vec<Span<'static>> {
+    use regex::Regex;
+    // Known file extensions for validation
+    let ext_pattern = r"(?:rs|ts|tsx|js|jsx|py|java|go|rb|c|h|cpp|hpp|cs|swift|kt|scala|vue|svelte|css|scss|less|html|json|yaml|yml|toml|md|sql|sh|bash|zsh|fish|env|gradle|lock|txt|cfg|ini|conf|properties|svg|png|jpg|gif|ico|woff|woff2|ttf)";
+    let re = Regex::new(&format!(
+        r"(?:(?:^|\s)(@?[\w./-]+\.{}(?::\d+(?:-\d+)?)?))", ext_pattern
+    )).expect("valid file path regex");
+
+    let mut spans = Vec::new();
+    let mut last_end = 0;
+    for cap in re.captures_iter(text) {
+        let m = cap.get(1).unwrap();
+        let start = m.start();
+        let end = m.end();
+        if start > last_end {
+            spans.push(Span::styled(text[last_end..start].to_string(), Style::default()));
+        }
+        spans.push(Span::styled(
+            m.as_str().to_string(),
+            Style::default().fg(BLUE).add_modifier(Modifier::UNDERLINED),
+        ));
+        last_end = end;
+    }
+    if last_end < text.len() {
+        spans.push(Span::styled(text[last_end..].to_string(), Style::default()));
+    }
+    if spans.is_empty() {
+        spans.push(Span::raw(text.to_string()));
+    }
+    spans
 }
 
 fn render_suggestions(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {

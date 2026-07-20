@@ -39,6 +39,7 @@ class FakeApi implements DesktopApi {
     { id: "history-1", role: "agent" as const, content: "Previous answer" },
   ]);
   openWorkspace = vi.fn(async () => undefined);
+  openFile = vi.fn(async () => undefined);
   searchContext = vi.fn(async (query: string) => ({
     indexedFiles: 1,
     indexedDirectories: 0,

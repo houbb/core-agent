@@ -56,6 +56,21 @@ export interface CommandSuggestion {
   summary: string;
 }
 
+export interface ContextReference {
+  id: string;
+  referenceType: "FILE" | "SELECTION" | "MESSAGE";
+  locator: {
+    path?: string;
+    startLine?: number;
+    endLine?: number;
+    content?: string;
+    sessionId?: string;
+    messageId?: string;
+  };
+  snapshot?: string;
+  createdAt: string;
+}
+
 export interface ContextCandidateSearch {
   indexedFiles: number;
   indexedDirectories: number;

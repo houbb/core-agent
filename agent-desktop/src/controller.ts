@@ -11,6 +11,8 @@ import type {
   WorkspaceSnapshot,
 } from "./types";
 
+import type { ContextReference } from "./types";
+
 export type WorkspaceKind =
   | "console"
   | "project"
@@ -56,6 +58,7 @@ export function createDesktopController(api: DesktopApi) {
     connected: false,
     snapshot: emptySnapshot(),
     conversation: [] as ConversationItem[],
+    contextReferences: [] as ContextReference[],
     currentSessionId: undefined as string | undefined,
     requestElapsedMs: 0,
     lastWallDurationMs: undefined as number | undefined,
@@ -195,6 +198,16 @@ export function createDesktopController(api: DesktopApi) {
     }
   }
 
+  async function openFile(path: string, line?: number) {
+    const workspacePath = state.snapshot.workspacePath;
+    const fullPath = path.startsWith("/") ? path : `${workspacePath}/${path}`;
+    try {
+      await api.openFile(fullPath, line);
+    } catch (error) {
+      state.error = error instanceof Error ? error.message : "Unable to open file";
+    }
+  }
+
   async function newSession() {
     await send("/new");
   }
@@ -302,6 +315,7 @@ export function createDesktopController(api: DesktopApi) {
     state,
     load,
     openWorkspace,
+    openFile,
     selectSession,
     newSession,
     send,

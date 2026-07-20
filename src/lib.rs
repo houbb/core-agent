@@ -84,6 +84,7 @@ pub use observability::{
     SqliteTraceStore, TraceCollector, TraceStep, TraceType,
 };
 pub use slash::{
+    agent_plugin::AgentCommandPlugin,
     CommandAction, CommandContext, CommandMetadata, CommandOutput,
     NoopSlashCommandObserver, ParsedCommand, SlashCategory, SlashCommand,
     SlashCommandObserver, SlashCommandRegistry, SlashError, SlashResult,

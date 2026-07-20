@@ -106,7 +106,10 @@ h3 { font-size: 15px; font-weight: 680; }
 .message-header > span { color: var(--text-tertiary); font-size: 9px; text-transform: uppercase; }
 .message-header button { display: inline-flex; align-items: center; gap: 4px; padding: 2px 5px; border: 0; border-radius: 6px; background: transparent; color: var(--text-tertiary); font-size: 9px; cursor: pointer; }
 .message-header button:hover { background: var(--bg-secondary); color: var(--text); }
-.message p { margin-block-start: 4px; color: var(--text); font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
+.message-content { margin-block-start: 4px; color: var(--text); font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
+.message-content .file-link { color: var(--accent-bright); text-decoration: underline; text-decoration-color: rgba(226, 181, 75, 0.3); text-underline-offset: 2px; cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 2px; }
+.message-content .file-link:hover { color: var(--accent); text-decoration-color: var(--accent); }
+.message-content .file-link svg { flex-shrink: 0; }
 .prompt-box { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin: 8px; padding: 8px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface-raised); }
 .prompt-box textarea { resize: none; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 12px; line-height: 1.45; }
 .send-button { align-self: end; min-height: 32px; min-width: 32px; padding: 6px; border-radius: 9px; }
@@ -446,6 +449,14 @@ input { border: 1px solid var(--border); border-radius: 8px; background: var(--b
 .rail-sessions .session-row.active { border-color: var(--border-strong); background: var(--accent-bg); }
 .file-rail > .project-tree { min-height: 0; flex: 1; overflow: auto; padding: 8px; }
 .selected-context { display: flex; align-items: center; gap: 5px; margin: 8px; padding: 8px 9px; overflow: hidden; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--accent-bg); color: var(--accent-bright); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+
+.context-chip-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 8px; }
+.context-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--accent-bg); color: var(--accent-bright); font-size: 10px; cursor: pointer; white-space: nowrap; }
+.context-chip:hover { border-color: var(--accent); }
+.chip-label { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip-line { color: var(--text-tertiary); font-size: 9px; }
+.chip-remove { display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--text-tertiary); cursor: pointer; }
+.chip-remove:hover { color: var(--danger); }
 
 .workspace-shell { min-height: 0; height: 100vh; }
 .compact-topbar { grid-template-columns: minmax(0, 1fr) auto; min-height: 60px; padding: 10px 16px; }

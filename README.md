@@ -223,7 +223,9 @@ core-agent/
 | `/config` | 查看配置 |
 | `/plan` | 制定计划 |
 | `/review` | 代码审查 |
-| `/test` | 测试生成 |
+| `/test` | 测试分析/生成/诊断（Test Agent） |
+| `/debug-agent` | 错误诊断/根因分析（Debug Agent） |
+| `/security-review` | 安全漏洞审计（Security Review Agent） |
 | `/fix` | 修复问题 |
 | `/undo` / `/redo` | 撤销/重做 |
 
@@ -242,6 +244,22 @@ core-agent/
 | `/team` | 团队创建与管理 |
 | `/roles` | 查看角色能力矩阵 |
 | `/collaborate` | 查看协作过程 |
+
+### Agent 委派
+
+通过 `delegate_task` 工具可调用 9 种 SubAgent Profile：
+
+| Profile | 描述 | 最大轮数 |
+|---------|------|:--------:|
+| `general` | 通用委托任务，只读工作区工具 | 4 |
+| `explore` | 只读探索工作区回答问题 | 4 |
+| `review` | 代码/设计审查 | 4 |
+| `test` | 测试分析、生成测试用例、诊断测试失败 | 8 |
+| `debug` | 错误诊断、栈追踪分析、根因定位 | 8 |
+| `security_review` | 安全漏洞审计（注入/XSS/CSRF/认证绕过等） | 6 |
+| `doc` | 文档生成与更新（README/CHANGELOG/API docs） | 6 |
+| `migration` | 代码迁移、框架升级、API 过渡 | 6 |
+| `architecture` | 架构分析、模块依赖、设计评审 | 6 |
 
 ### 文件上下文
 

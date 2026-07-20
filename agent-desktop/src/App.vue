@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import {
   ArrowUp,
   Copy,
+  FileCode,
   FolderOpen,
   Gauge,
   Globe2,
@@ -19,6 +20,7 @@ import { TauriDesktopApi } from "./api";
 import { createDesktopController, type WorkspaceKind } from "./controller";
 import ApprovalDialog from "./components/ApprovalDialog.vue";
 import CollaborationWorkspace from "./components/CollaborationWorkspace.vue";
+import ContextChip from "./components/ContextChip.vue";
 import EcosystemWorkspace from "./components/EcosystemWorkspace.vue";
 import EmptyState from "./components/EmptyState.vue";
 import EnterpriseWorkspace from "./components/EnterpriseWorkspace.vue";
@@ -335,6 +337,46 @@ function formatDuration(milliseconds?: number) {
     : `${Math.floor(milliseconds / 60_000)}m ${Math.floor((milliseconds % 60_000) / 1000)}s`;
 }
 
+interface ContentSegment {
+  type: "text" | "file-link";
+  text: string;
+  path?: string;
+  line?: number;
+  display?: string;
+}
+
+function parseContentSegments(text: string): ContentSegment[] {
+  const segments: ContentSegment[] = [];
+  const filePathRe = /((?:@?[\w./-]+\.[a-z]+)(?::(\d+)(?:-\d+)?)?)/gi;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = filePathRe.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      segments.push({ type: "text", text: text.slice(lastIndex, match.index) });
+    }
+    const full = match[1];
+    const pathPart = full.startsWith("@") ? full.slice(1) : full;
+    const linePart = match[2] ? parseInt(match[2], 10) : undefined;
+    const [filePath] = pathPart.split(":");
+    segments.push({
+      type: "file-link",
+      text: full,
+      path: filePath,
+      line: linePart,
+      display: full,
+    });
+    lastIndex = match.index + full.length;
+  }
+  if (lastIndex < text.length) {
+    segments.push({ type: "text", text: text.slice(lastIndex) });
+  }
+  return segments.length ? segments : [{ type: "text", text }];
+}
+
+function openFileFromSegment(segment: ContentSegment) {
+  if (segment.path) controller.openFile(segment.path, segment.line);
+}
+
 function formatTokens(tokens: number) {
   return tokens >= 1_000_000
     ? `${(tokens / 1_000_000).toFixed(1)}M`
@@ -390,11 +432,23 @@ function localDay(date: Date) {
           <div v-if="!controller.state.conversation.length" class="welcome-copy"><span class="brand-orb">A</span><h2>{{ t.welcome }}</h2><p>{{ t.welcomeDetail }}</p></div>
           <article v-for="item in controller.state.conversation" :key="item.id" class="message" :class="item.role">
             <header class="message-header"><span>{{ item.role }}</span><button :aria-label="`Copy ${item.role} message`" @click="copyMessage(item.id, item.content)"><Copy :size="12" />{{ copiedMessageId === item.id ? "Copied" : "Copy" }}</button></header>
-            <p>{{ item.content }}</p>
+            <div class="message-content">
+              <template v-for="(segment, i) in parseContentSegments(item.content)" :key="i">
+                <span v-if="segment.type === 'text'">{{ segment.text }}</span>
+                <a v-else class="file-link" href="#" @click.prevent="openFileFromSegment(segment)">
+                  <FileCode :size="12" />{{ segment.display }}
+                </a>
+              </template>
+            </div>
           </article>
         </div>
 
         <form class="prompt-box chat-prompt" @submit.prevent="send">
+          <ContextChip
+            :references="controller.state.contextReferences"
+            @remove="(id: string) => controller.state.contextReferences = controller.state.contextReferences.filter(r => r.id !== id)"
+            @open="(ref) => openFileFromSegment({ type: 'file-link', text: ref.locator.path || '', path: ref.locator.path, line: ref.locator.startLine, display: ref.locator.path })"
+          />
           <div v-if="completions.length || completionHint" class="prompt-completions" role="listbox">
             <button v-for="(completion, index) in completions" :key="`${completion.kind}:${completion.label}`" type="button" :class="{ selected: index === selectedCompletion }" @mousedown.prevent="applyCompletion(index)"><strong>{{ completion.label }}</strong><span>{{ completion.detail }}</span></button>
             <small v-if="completionHint">{{ completionHint }}</small>
