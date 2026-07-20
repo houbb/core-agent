@@ -261,6 +261,27 @@ impl PlanningStrategy for DefaultPlanningStrategy {
     }
 }
 
+pub struct ExternalPlanBuilder {
+    pub draft: PlanDraft,
+}
+
+impl ExternalPlanBuilder {
+    pub fn new(draft: PlanDraft) -> Self {
+        Self { draft }
+    }
+}
+
+#[async_trait]
+impl PlanBuilder for ExternalPlanBuilder {
+    fn key(&self) -> &str {
+        "external"
+    }
+
+    async fn build(&self, _goal: &Goal, _context: &PlanningContext) -> PlanResult<PlanDraft> {
+        Ok(self.draft.clone())
+    }
+}
+
 pub struct RulePlanBuilder;
 
 impl RulePlanBuilder {

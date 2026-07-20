@@ -32,9 +32,12 @@ impl Tool for AskUserTool {
         // This tool is handled by the Agent framework at a higher level.
         // The actual user interaction happens outside the tool runtime.
         // The tool returns a structured result that signals "ask the user".
-        Ok(RawToolOutput::text(format!(
+        let mut output = RawToolOutput::text(format!(
             "[ASK_USER] {question}\n\n(Waiting for user response...)"
-        )))
+        ));
+        output.metadata.insert("user_input_required".to_string(), "true".to_string());
+        output.metadata.insert("question".to_string(), question.to_string());
+        Ok(output)
     }
 }
 

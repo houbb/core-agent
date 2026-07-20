@@ -12,8 +12,8 @@ use crate::defaults::{
 };
 use crate::domain::{
     validate_actor, validate_metadata, Action, CreateGoalRequest, CreatePlanRequest, Goal,
-    GoalStatus, Plan, PlanDraft, PlanSnapshot, PlanStatus, PlanningEdge, PlanningGraph,
-    PlanningNode, PlanningNodeKind, PlanningRelation, ReviewDecision, Step, Task,
+    GoalStatus, Plan, PlanDraft, PlanSnapshot, PlanStatus, PlanningContext, PlanningEdge,
+    PlanningGraph, PlanningNode, PlanningNodeKind, PlanningRelation, ReviewDecision, Step, Task,
     UpdateGoalRequest, UpdatePlanRequest, WorkStatus,
 };
 use crate::error::{PlanError, PlanResult};
@@ -357,6 +357,66 @@ impl PlanningManager {
         Ok(plan)
     }
 
+    pub async fn create_plan_from_draft(
+        &self,
+        goal_id: Uuid,
+        draft: PlanDraft,
+        context: PlanningContext,
+        actor: &str,
+    ) -> PlanResult<Plan> {
+        let plan_id = Uuid::new_v4();
+        let result = self
+            .create_plan_from_draft_inner(plan_id, goal_id, draft, context, actor)
+            .await;
+        self.notify_result(
+            PlanningOperation::CreatePlan,
+            if result.is_ok() {
+                PlanningStage::Persist
+            } else {
+                PlanningStage::Build
+            },
+            Some(goal_id),
+            result.as_ref().ok().map(|plan| plan.id),
+            &result,
+        );
+        result
+    }
+
+    async fn create_plan_from_draft_inner(
+        &self,
+        plan_id: Uuid,
+        goal_id: Uuid,
+        draft: PlanDraft,
+        context: PlanningContext,
+        actor: &str,
+    ) -> PlanResult<Plan> {
+        validate_actor(actor)?;
+        context.validate()?;
+        let goal = self.required_goal(goal_id).await?;
+        self.evaluate_policy(PlanningOperation::CreatePlan, Some(&goal), None)?;
+        let now = Utc::now();
+        let mut plan = Plan {
+            id: plan_id,
+            goal_id: goal.id,
+            strategy_key: "external".to_string(),
+            status: PlanStatus::Created,
+            tasks: BTreeMap::new(),
+            graph: PlanningGraph::default(),
+            review: None,
+            metadata: BTreeMap::from([("builder_key".into(), serde_json::json!("external"))]),
+            version: 1,
+            created_at: now,
+            updated_at: now,
+        };
+        self.lifecycle.transition(&mut plan, PlanStatus::Planning)?;
+        self.materialize(&goal, &mut plan, draft)?;
+        validate_action_context(&plan, &context)?;
+        self.review(&mut plan).await?;
+        self.evaluate_policy(PlanningOperation::CreatePlan, Some(&goal), Some(&plan))?;
+        self.catalog.save_plan(&plan, None, actor).await?;
+        Ok(plan)
+    }
+
     pub async fn update_plan(&self, request: UpdatePlanRequest) -> PlanResult<Plan> {
         let plan_id = request.plan_id;
         let result = self.update_plan_inner(request).await;
@@ -442,6 +502,51 @@ impl PlanningManager {
         let previous = PlanSnapshot::capture(&plan, "before-cancel")?;
         self.lifecycle
             .transition(&mut plan, PlanStatus::Cancelled)?;
+        plan.version = next_version(plan.version, "plan")?;
+        plan.validate()?;
+        self.catalog
+            .save_plan(&plan, Some(&previous), actor)
+            .await?;
+        Ok(plan)
+    }
+
+    pub async fn transition_plan(
+        &self,
+        id: Uuid,
+        expected_version: u64,
+        status: PlanStatus,
+        actor: &str,
+    ) -> PlanResult<Plan> {
+        let result = self.transition_plan_inner(id, expected_version, status, actor).await;
+        self.notify_result(
+            PlanningOperation::UpdatePlan,
+            PlanningStage::Persist,
+            result.as_ref().ok().map(|plan| plan.goal_id),
+            Some(id),
+            &result,
+        );
+        result
+    }
+
+    async fn transition_plan_inner(
+        &self,
+        id: Uuid,
+        expected_version: u64,
+        status: PlanStatus,
+        actor: &str,
+    ) -> PlanResult<Plan> {
+        validate_actor(actor)?;
+        let mut plan = self.required_plan(id).await?;
+        self.require_version(&plan, expected_version)?;
+        let goal = self.required_goal(plan.goal_id).await?;
+        self.evaluate_policy(PlanningOperation::UpdatePlan, Some(&goal), Some(&plan))?;
+        if matches!(plan.status, PlanStatus::Completed) {
+            return Err(PlanError::InvalidState(
+                "cannot transition a completed plan".into(),
+            ));
+        }
+        let previous = PlanSnapshot::capture(&plan, "before-transition")?;
+        self.lifecycle.transition(&mut plan, status)?;
         plan.version = next_version(plan.version, "plan")?;
         plan.validate()?;
         self.catalog

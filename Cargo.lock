@@ -1111,6 +1111,7 @@ version = "0.38.4"
 dependencies = [
  "async-trait",
  "chrono",
+ "core-agent-plan",
  "glob",
  "jsonschema",
  "lsp-types",

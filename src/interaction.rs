@@ -454,6 +454,31 @@ impl InteractionCommandRegistry {
                 3,
                 InteractionCommandRoute::Runtime,
             ),
+            // ── Plan commands (Runtime) ──
+            (
+                "plan-show",
+                "Show plan details",
+                "/plan-show <id>",
+                1,
+                1,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "plan-list",
+                "List all plans",
+                "/plan-list",
+                0,
+                0,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "plan-approve",
+                "Approve a plan and start execution",
+                "/plan-approve <id>",
+                1,
+                1,
+                InteractionCommandRoute::Runtime,
+            ),
             // ── Cognitive commands (Phase 4) ──
             (
                 "reason",

@@ -26,6 +26,7 @@ import EcosystemWorkspace from "./components/EcosystemWorkspace.vue";
 import EmptyState from "./components/EmptyState.vue";
 import EnterpriseWorkspace from "./components/EnterpriseWorkspace.vue";
 import PanelShell from "./components/PanelShell.vue";
+import PlanPanel from "./components/PlanPanel.vue";
 import ProjectTree from "./components/ProjectTree.vue";
 import SidebarNav from "./components/SidebarNav.vue";
 import StudioWorkspace from "./components/StudioWorkspace.vue";
@@ -623,6 +624,16 @@ function localDay(date: Date) {
         <PanelShell v-else-if="controller.state.activeWorkspace === 'memory'" title="Memory" :count="controller.state.snapshot.memory.length"><div class="card-grid"><article v-for="item in controller.state.snapshot.memory" :key="item.id" class="info-card"><span class="badge badge-neutral">{{ item.kind }}</span><h3>{{ item.title }}</h3><p>{{ item.summary }}</p></article></div></PanelShell>
         <PanelShell v-else-if="controller.state.activeWorkspace === 'sessions'" :title="t.sessions" :count="controller.state.snapshot.sessions.length"><div class="session-list"><button v-for="session in controller.state.snapshot.sessions" :key="session.sessionId" class="session-row" @click="controller.selectSession(session.sessionId)"><span><strong>{{ session.title }}</strong><small>{{ session.updatedAt }}</small></span><span class="badge badge-neutral">{{ session.state }}</span></button></div></PanelShell>
         <StudioWorkspace v-else-if="controller.state.activeWorkspace === 'studio'" />
+        <PlanPanel
+          v-else-if="controller.state.activeWorkspace === 'plan'"
+          :plan="controller.state.planPanel?.currentPlan ?? null"
+          :plans="controller.state.planPanel?.plans ?? []"
+          :loading="controller.state.planPanel?.loading ?? false"
+          @select-plan="controller.loadPlan"
+          @approve-plan="controller.approvePlan"
+          @cancel-plan="controller.cancelPlan"
+          @refresh="controller.loadPlans"
+        />
         <CollaborationWorkspace v-else-if="controller.state.activeWorkspace === 'collaboration'" />
         <EnterpriseWorkspace v-else-if="controller.state.activeWorkspace === 'enterprise'" />
         <EcosystemWorkspace v-else-if="controller.state.activeWorkspace === 'ecosystem'" />

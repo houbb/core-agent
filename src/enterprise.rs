@@ -10,7 +10,7 @@ use core_agent_context::{
 };
 use core_agent_ecosystem::{EcosystemManager, Publisher};
 use core_agent_event::EventManager;
-use core_agent_execution::ExecutionManager;
+use core_agent_execution::{ExecuteRequest, ExecutionManager};
 use core_agent_extension::ExtensionManager;
 use core_agent_governance::{
     EnterpriseGovernanceManager, EnterprisePrincipal, IdentityProviderKind,
@@ -24,7 +24,7 @@ use core_agent_model::{
     SqliteModelStore, UsageBucket, UsageCollector,
 };
 use core_agent_multi::MultiAgentManager;
-use core_agent_plan::PlanningManager;
+use core_agent_plan::{PlanStatus, PlanningManager};
 use core_agent_platform::{
     PlatformManager, PlatformOrganization, PlatformPolicy, PolicyEffect, PolicyRule, Tenant,
 };
@@ -636,6 +636,72 @@ impl EnterpriseAgent {
                 )))
                 .build(),
         );
+        // Register real plan tools connected to PlanningManager
+        {
+            let plan_create = core_agent_tool::builtin::plan::plan_create_tool_with_planning(planning.clone());
+            let plan_update = core_agent_tool::builtin::plan::plan_update_tool_with_planning(planning.clone());
+            let plan_review = core_agent_tool::builtin::plan::plan_review_tool_with_planning(planning.clone());
+
+            let plan_provider = StaticToolProvider::new(
+                ToolProviderDefinition::new(
+                    "plan-runtime",
+                    "Runtime Plan Tools",
+                    ToolProviderKind::Builtin,
+                ),
+                vec![
+                    {
+                        let mut def = ToolDefinition::new(
+                            "plan-runtime", "plan.create", "1.0.0",
+                            serde_json::json!({
+                                "type": "object",
+                                "properties": {
+                                    "goal": {"type": "string", "description": "The goal of the plan"},
+                                    "description": {"type": "string", "description": "Optional description"},
+                                    "tasks": {"type": "array", "items": {"type": "object"}, "description": "Tasks to execute"}
+                                },
+                                "required": ["goal", "tasks"]
+                            }),
+                        );
+                        def.default_permission = PermissionDecision::Allow;
+                        def.timeout_ms = 60000;
+                        ToolRegistration::new(def, plan_create)
+                    },
+                    {
+                        let mut def = ToolDefinition::new(
+                            "plan-runtime", "plan.update", "1.0.0",
+                            serde_json::json!({
+                                "type": "object",
+                                "properties": {
+                                    "plan_id": {"type": "string", "description": "Plan ID"},
+                                    "status": {"type": "string", "description": "New status: READY, CANCELLED, PLANNING, REVIEWING"},
+                                    "version": {"type": "integer", "description": "Expected version"}
+                                },
+                                "required": ["plan_id", "status"]
+                            }),
+                        );
+                        def.default_permission = PermissionDecision::Allow;
+                        def.timeout_ms = 30000;
+                        ToolRegistration::new(def, plan_update)
+                    },
+                    {
+                        let mut def = ToolDefinition::new(
+                            "plan-runtime", "plan.review", "1.0.0",
+                            serde_json::json!({
+                                "type": "object",
+                                "properties": {
+                                    "plan_id": {"type": "string", "description": "Plan ID"}
+                                },
+                                "required": ["plan_id"]
+                            }),
+                        );
+                        def.default_permission = PermissionDecision::Allow;
+                        def.timeout_ms = 30000;
+                        ToolRegistration::new(def, plan_review)
+                    },
+                ],
+            );
+            tools.load_provider(&plan_provider).await.map_err(tool_error)?;
+        }
         let platform = Arc::new(PlatformManager::builder().build());
         let kernel = Arc::new(RuntimeKernel::builder().build());
         let platform_adapter = Arc::new(crate::integrations::PlatformKernelRuntime::new(
@@ -1320,6 +1386,89 @@ impl EnterpriseAgent {
                         "status": "learn_requested"
                     });
                 }
+            }
+            // ── Plan commands ──
+            "plan-show" => {
+                let id_str = invocation.arguments.first().ok_or_else(|| {
+                    EnterpriseAgentError::InvalidArgument("plan id is required".into())
+                })?;
+                let plan_id = Uuid::parse_str(id_str)
+                    .map_err(|_| EnterpriseAgentError::InvalidArgument("invalid plan id".into()))?;
+                let plan = self.runtimes.planning.find_plan(plan_id).await
+                    .map_err(|e| EnterpriseAgentError::Runtime(e.to_string()))?
+                    .ok_or_else(|| EnterpriseAgentError::InvalidArgument("plan not found".into()))?;
+                let goal = self.runtimes.planning.find_goal(plan.goal_id).await
+                    .map_err(|e| EnterpriseAgentError::Runtime(e.to_string()))?
+                    .ok_or_else(|| EnterpriseAgentError::InvalidArgument("goal not found".into()))?;
+
+                let mut response = format!("Plan: {}\n  Goal: {}\n  Status: {}\n  Version: {}\n",
+                    plan.id, goal.title, plan.status.as_str(), plan.version);
+                if let Some(review) = &plan.review {
+                    response.push_str(&format!("  Review: {}\n", review.decision.as_str()));
+                }
+                response.push_str("\n  Tasks:\n");
+                for task in plan.tasks.values() {
+                    response.push_str(&format!("    [{}] {}\n", task.status.as_str(), task.name));
+                    for step in task.steps.values() {
+                        response.push_str(&format!("      - {} [{}]\n", step.name, step.status.as_str()));
+                    }
+                }
+                outcome.response = response;
+                outcome.data = json!({"planId": plan.id, "status": plan.status.as_str()});
+            }
+            "plan-list" => {
+                let goals = self.runtimes.planning.list_goals().await
+                    .map_err(|e| EnterpriseAgentError::Runtime(e.to_string()))?;
+                let mut response = String::from("Plans:\n");
+                for goal in &goals {
+                    let plans = self.runtimes.planning.list_plans(goal.id).await
+                        .map_err(|e| EnterpriseAgentError::Runtime(e.to_string()))?;
+                    for plan in &plans {
+                        response.push_str(&format!("  {}  {}  {}\n",
+                            plan.id, plan.status.as_str(), goal.title));
+                    }
+                }
+                if response == "Plans:\n" {
+                    response = "No plans found.".into();
+                }
+                outcome.response = response;
+                outcome.data = json!({"plans": goals.len()});
+            }
+            "plan-approve" => {
+                let id_str = invocation.arguments.first().ok_or_else(|| {
+                    EnterpriseAgentError::InvalidArgument("plan id is required".into())
+                })?;
+                let plan_id = Uuid::parse_str(id_str)
+                    .map_err(|_| EnterpriseAgentError::InvalidArgument("invalid plan id".into()))?;
+                let plan = self.runtimes.planning.find_plan(plan_id).await
+                    .map_err(|e| EnterpriseAgentError::Runtime(e.to_string()))?
+                    .ok_or_else(|| EnterpriseAgentError::InvalidArgument("plan not found".into()))?;
+
+                // Transition plan to Ready
+                let plan = self.runtimes.planning.transition_plan(
+                    plan_id, plan.version, PlanStatus::Ready, "user"
+                ).await.map_err(|e| EnterpriseAgentError::Runtime(e.to_string()))?;
+
+                // Execute the plan
+                let execution = self.runtimes.execution.execute(
+                    plan.clone(),
+                    ExecuteRequest::new("user"),
+                ).await.map_err(|e| EnterpriseAgentError::Runtime(e.to_string()))?;
+
+                let mut response = format!(
+                    "Plan approved and execution started.\nPlan ID: {}\nExecution ID: {}\nStatus: {}\n\nProgress:\n",
+                    plan.id, execution.id, execution.status.as_str()
+                );
+                for task in plan.tasks.values() {
+                    let status = task.status.as_str();
+                    let marker = if status == "COMPLETED" { "x" } else { " " };
+                    response.push_str(&format!("  [{}] {}  [{}]\n", marker, task.name, status));
+                    for step in task.steps.values() {
+                        response.push_str(&format!("    - {} [{}]\n", step.name, step.status.as_str()));
+                    }
+                }
+                outcome.response = response;
+                outcome.data = json!({"planId": plan.id, "executionId": execution.id, "status": execution.status.as_str()});
             }
             // ── Workflow commands (Phase 5) ──
             "workflow" => {
@@ -2366,6 +2515,19 @@ impl EnterpriseAgent {
                             return Err(error);
                         }
                     }
+                }
+                // Check if this tool result signals user input is required (ask.user/ask.select/ask.confirm)
+                if result.metadata.get("user_input_required").map(|v| v.as_str()) == Some("true") {
+                    let question = result.metadata.get("question").cloned().unwrap_or_default();
+                    events.push(EnterpriseAgentEvent {
+                        kind: "user_input_required".into(),
+                        message: question.clone(),
+                        data: json!({"question": question, "tool": call.name}),
+                    });
+                    response_text = Some(format!(
+                        "\n\n[Agent needs your input]\n{question}\n\nPlease respond to continue."
+                    ));
+                    break;
                 }
                 let content = serde_json::to_string(&result)?;
                 if let Err(error) = self

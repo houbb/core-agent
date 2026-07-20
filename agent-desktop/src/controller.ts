@@ -4,6 +4,7 @@ import type {
   CompressionSetting,
   ConversationItem,
   ModelSetting,
+  PlanSnapshot,
   SettingsSnapshot,
   TraceStep,
   UiPreference,
@@ -21,6 +22,7 @@ export type WorkspaceKind =
   | "tools"
   | "memory"
   | "sessions"
+  | "plan"
   | "studio"
   | "collaboration"
   | "enterprise"
@@ -70,6 +72,11 @@ export function createDesktopController(api: DesktopApi) {
     recentProjects: [] as Array<{ name: string; path: string }>,
     theme: "dark" as "light" | "dark",
     language: "zh-CN" as "zh-CN" | "en",
+    planPanel: {
+      currentPlan: undefined as PlanSnapshot | undefined,
+      plans: [] as PlanSnapshot[],
+      loading: false,
+    },
   });
 
   async function load() {
@@ -323,6 +330,38 @@ export function createDesktopController(api: DesktopApi) {
     }
   }
 
+  async function loadPlans() {
+    state.planPanel.loading = true;
+    try {
+      state.planPanel.plans = await api.loadPlans();
+    } catch (e) {
+      console.error("Failed to load plans", e);
+    } finally {
+      state.planPanel.loading = false;
+    }
+  }
+
+  async function loadPlan(planId: string) {
+    state.planPanel.loading = true;
+    try {
+      state.planPanel.currentPlan = await api.loadPlan(planId);
+    } catch (e) {
+      console.error("Failed to load plan", e);
+    } finally {
+      state.planPanel.loading = false;
+    }
+  }
+
+  async function approvePlan(planId: string) {
+    await api.approvePlan(planId);
+    await loadPlans();
+  }
+
+  async function cancelPlan(planId: string) {
+    await api.sendMessage(`/plan-cancel ${planId}`);
+    await loadPlans();
+  }
+
   function selectWorkspace(workspace: WorkspaceKind) {
     state.activeWorkspace = workspace;
   }
@@ -348,6 +387,10 @@ export function createDesktopController(api: DesktopApi) {
     loadSettings,
     saveSettings,
     setPermissionMode,
+    loadPlans,
+    loadPlan,
+    approvePlan,
+    cancelPlan,
     dispose,
   };
 }

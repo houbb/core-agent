@@ -46,10 +46,13 @@ impl Tool for AskSelectTool {
             })
             .collect();
 
-        Ok(RawToolOutput::text(format!(
+        let mut output = RawToolOutput::text(format!(
             "[ASK_SELECT] {question}\n\nOptions:\n{}\n\n(Waiting for selection...)",
             options_str.join("\n")
-        )))
+        ));
+        output.metadata.insert("user_input_required".to_string(), "true".to_string());
+        output.metadata.insert("question".to_string(), question.to_string());
+        Ok(output)
     }
 }
 

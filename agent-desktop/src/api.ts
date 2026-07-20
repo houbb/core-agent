@@ -1,6 +1,7 @@
 import type {
   ChangeItem,
   MemoryItem,
+  PlanSnapshot,
   ProjectNode,
   SessionItem,
   ToolStatus,
@@ -55,6 +56,9 @@ export interface DesktopApi {
     value: unknown;
     expectedVersion?: number;
   }): Promise<UiPreference>;
+  loadPlan(planId: string): Promise<PlanSnapshot>;
+  loadPlans(): Promise<PlanSnapshot[]>;
+  approvePlan(planId: string): Promise<void>;
   subscribe(sessionId: string, onEvent: (event: TraceStep) => void): () => void;
 }
 
@@ -114,6 +118,23 @@ export class TauriDesktopApi implements DesktopApi {
     expectedVersion?: number;
   }): Promise<UiPreference> {
     return invoke<UiPreference>("save_preference", { request });
+  }
+
+  async approvePlan(planId: string): Promise<void> {
+    await invoke<void>("agent_send_message", {
+      request: { message: `/plan-approve ${planId}`, sessionId: undefined },
+    });
+  }
+
+  async loadPlan(planId: string): Promise<PlanSnapshot> {
+    return invoke<PlanSnapshot>("agent_load_plan", { planId });
+  }
+
+  async loadPlans(): Promise<PlanSnapshot[]> {
+    const response = await invoke<string>("agent_send_message", {
+      request: { message: "/plan-list", sessionId: undefined },
+    });
+    return []; // Parse from response
   }
 
   subscribe(sessionId: string, onEvent: (event: TraceStep) => void): () => void {
@@ -281,6 +302,22 @@ export class HttpDesktopApi implements DesktopApi {
       }
     };
     return () => source.close();
+  }
+
+  async loadPlan(planId: string): Promise<PlanSnapshot> {
+    return this.get<PlanSnapshot>(`/api/plan/${encodeURIComponent(planId)}`);
+  }
+
+  async loadPlans(): Promise<PlanSnapshot[]> {
+    try {
+      return await this.get<PlanSnapshot[]>("/api/plan/list");
+    } catch {
+      return [];
+    }
+  }
+
+  async approvePlan(planId: string): Promise<void> {
+    await this.request(`/api/plan/${encodeURIComponent(planId)}/approve`, { method: "POST" });
   }
 
   private get<T>(path: string): Promise<T> {

@@ -195,3 +195,30 @@ export interface UsageSnapshot {
   buckets: UsageBucket[];
   requests: RequestMetric[];
 }
+
+export interface PlanSnapshot {
+  id: string;
+  goalTitle: string;
+  status: string;
+  tasks: TaskSnapshot[];
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskSnapshot {
+  id: string;
+  key: string;
+  name: string;
+  status: string;
+  priority: number;
+  steps: StepSnapshot[];
+}
+
+export interface StepSnapshot {
+  id: string;
+  key: string;
+  name: string;
+  status: string;
+  actionKind: string;
+}

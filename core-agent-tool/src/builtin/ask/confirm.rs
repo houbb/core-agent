@@ -27,9 +27,12 @@ impl Tool for AskConfirmTool {
             return Err(ToolError::InvalidArgument("message must not be empty".into()));
         }
 
-        Ok(RawToolOutput::text(format!(
+        let mut output = RawToolOutput::text(format!(
             "[ASK_CONFIRM] {message}\n\n(Waiting for Yes/No confirmation...)"
-        )))
+        ));
+        output.metadata.insert("user_input_required".to_string(), "true".to_string());
+        output.metadata.insert("question".to_string(), message.to_string());
+        Ok(output)
     }
 }
 
