@@ -101,6 +101,95 @@ async fn run() -> agent_cli::CliResult<()> {
         CliCommand::Pr => print_lines(professional.execute_line("/pr").await?),
         CliCommand::Tools => print_lines(professional.execute_line("/tools").await?),
         CliCommand::Memory => print_lines(professional.execute_line("/memory").await?),
+        CliCommand::Compact => print_lines(professional.execute_line("/compact").await?),
+        CliCommand::Checkpoint { subcommand, name_or_id } => {
+            let line = match (subcommand, name_or_id) {
+                (Some(cmd), Some(arg)) => format!("/checkpoint {cmd} {arg}"),
+                (Some(cmd), None) => format!("/checkpoint {cmd}"),
+                (None, _) => "/checkpoint".into(),
+            };
+            print_lines(professional.execute_line(&line).await?)
+        }
+        CliCommand::Search { query } => {
+            let line = format!("/search {}", query.join(" "));
+            print_lines(professional.execute_line(&line).await?)
+        }
+        CliCommand::Trace { function, depth } => {
+            let line = match depth {
+                Some(d) => format!("/trace {function} --depth {d}"),
+                None => format!("/trace {function}"),
+            };
+            print_lines(professional.execute_line(&line).await?)
+        }
+        CliCommand::Architecture => {
+            print_lines(professional.execute_line("/architecture").await?)
+        }
+        CliCommand::Permissions => {
+            print_lines(professional.execute_line("/permissions").await?)
+        }
+        CliCommand::Approve { arg } => {
+            print_lines(professional.execute_line(&format!("/approve {arg}")).await?)
+        }
+        CliCommand::MemoryShow { scope } => {
+            let line = match scope {
+                Some(s) => format!("/memory-show {s}"),
+                None => "/memory-show".into(),
+            };
+            print_lines(professional.execute_line(&line).await?)
+        }
+        CliCommand::MemorySave { content } => {
+            let line = format!("/memory-save {}", content.join(" "));
+            print_lines(professional.execute_line(&line).await?)
+        }
+        CliCommand::MemoryClear { scope, confirm } => {
+            let line = if confirm {
+                format!("/memory-clear {scope} --confirm")
+            } else {
+                format!("/memory-clear {scope}")
+            };
+            print_lines(professional.execute_line(&line).await?)
+        }
+        CliCommand::Knowledge => {
+            print_lines(professional.execute_line("/knowledge").await?)
+        }
+        CliCommand::Learn { path, recursive } => {
+            let line = if recursive {
+                format!("/learn {path} --recursive")
+            } else {
+                format!("/learn {path}")
+            };
+            print_lines(professional.execute_line(&line).await?)
+        }
+        CliCommand::TraceAgent { trace_id } => {
+            let line = match trace_id {
+                Some(id) => format!("/trace-agent {id}"),
+                None => "/trace-agent".into(),
+            };
+            print_lines(professional.execute_line(&line).await?)
+        }
+        CliCommand::Evaluate { trace_id } => {
+            print_lines(professional.execute_line(&format!("/evaluate {trace_id}")).await?)
+        }
+        CliCommand::Benchmark { agent_id } => {
+            let line = match agent_id {
+                Some(id) => format!("/benchmark {id}"),
+                None => "/benchmark".into(),
+            };
+            print_lines(professional.execute_line(&line).await?)
+        }
+        CliCommand::DebugCmd { trace_id } => {
+            print_lines(professional.execute_line(&format!("/debug {trace_id}")).await?)
+        }
+        CliCommand::Replay { trace_id } => {
+            print_lines(professional.execute_line(&format!("/replay {trace_id}")).await?)
+        }
+        CliCommand::Score { agent_id } => {
+            let line = match agent_id {
+                Some(id) => format!("/score {id}"),
+                None => "/score".into(),
+            };
+            print_lines(professional.execute_line(&line).await?)
+        }
         CliCommand::Chat => {
             application.begin_chat()?;
             if use_tui {

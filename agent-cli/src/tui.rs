@@ -958,6 +958,7 @@ mod tests {
         let mut state = state();
         state.insert('/');
         state.insert('p');
+        state.insert('l');
         assert!(state
             .suggestions
             .iter()

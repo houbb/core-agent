@@ -16,6 +16,7 @@
 //! + Phase 13 (Platform Runtime)
 
 mod checkpoint;
+mod cognitive;
 mod command_runtime;
 mod enterprise;
 mod guidance;
@@ -24,11 +25,16 @@ mod interaction;
 mod managed_policy;
 mod mcp_runtime;
 mod memory_tools;
+mod observability;
 mod skill_tools;
+mod slash;
 mod subagent_runtime;
 mod web_runtime;
 mod workspace_tools;
 
+pub use cognitive::{
+    AdrEntry, AdrStatus, CognitiveCommand, CognitiveOutput,
+};
 pub use command_runtime::{
     BackgroundCommandManager, BackgroundCommandSnapshot, BackgroundCommandStatus, CommandEvent,
     CommandObserver, CommandOutcome as GovernedCommandOutcome,
@@ -71,6 +77,17 @@ pub use interaction::{
     InteractionCommandDefinition, InteractionCommandInvocation, InteractionCommandRegistry,
     InteractionCommandRoute, InteractionEntryAction, InteractionEntryOutcome, InteractionError,
     InteractionResult, ResolvedContextItem, ResolvedContextMentions,
+};
+pub use observability::{
+    AgentHealth, AgentTrace, BenchmarkEngine, BenchmarkResult, BenchmarkSummary, DebugAnalysis,
+    DebugEngine, Evaluation, EvaluationEngine, ReplayEngine, ReplayReport, ScoreDimension, ScoreItem,
+    SqliteTraceStore, TraceCollector, TraceStep, TraceType,
+};
+pub use slash::{
+    CommandAction, CommandContext, CommandMetadata, CommandOutput,
+    NoopSlashCommandObserver, ParsedCommand, SlashCategory, SlashCommand,
+    SlashCommandObserver, SlashCommandRegistry, SlashError, SlashResult,
+    society_plugin::SocietyCommandPlugin,
 };
 
 pub use core_agent_config as config_runtime;

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use crate::cognitive::CognitiveCommand;
 use crate::enterprise::{blocked_workspace_name, resolve_workspace_resource};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,6 +80,7 @@ impl InteractionCommandInvocation {
             && matches!(
                 self.name.as_str(),
                 "plan" | "review" | "explain" | "commit" | "pr"
+                    | "reason" | "think" | "hypothesis" | "critic"
             )
     }
 
@@ -105,6 +107,11 @@ impl InteractionCommandInvocation {
                 self.name
             )));
         }
+        // Cognitive commands use the CognitiveEngine prompt template
+        if let Some(cognitive) = self.cognitive_command() {
+            use crate::cognitive::CognitiveCommand;
+            return Ok(cognitive.model_prompt(&self.arguments));
+        }
         let access = if self.is_read_only() {
             "This command is strictly read-only. Do not edit files or run commands with side effects. Only workspace reads and explicitly safe inspection commands are available."
         } else {
@@ -118,6 +125,19 @@ impl InteractionCommandInvocation {
             workspace.display(),
             access,
         ))
+    }
+
+    /// Returns the CognitiveCommand variant if this is a cognitive command
+    pub fn cognitive_command(&self) -> Option<CognitiveCommand> {
+        match self.name.as_str() {
+            "reason" => Some(CognitiveCommand::Reason),
+            "think" => Some(CognitiveCommand::Think),
+            "hypothesis" => Some(CognitiveCommand::Hypothesis),
+            "critic" => Some(CognitiveCommand::Critic),
+            "reflect" => Some(CognitiveCommand::Reflect),
+            "decision" => Some(CognitiveCommand::Decision),
+            _ => None,
+        }
     }
 }
 
@@ -328,6 +348,249 @@ impl InteractionCommandRegistry {
                 "/context <list|remove|clear> [id]",
                 0,
                 2,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "compact",
+                "Compress current conversation context to reduce token usage",
+                "/compact",
+                0,
+                0,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "resume",
+                "Resume a paused session with its context restored",
+                "/resume <session-id>",
+                1,
+                1,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "checkpoint",
+                "Save, list, or restore Agent state checkpoints",
+                "/checkpoint <save|list|restore> [name|id]",
+                1,
+                2,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "search",
+                "Search code symbols and files across the project",
+                "/search <query> [--type <language>] [--kind <symbol-kind>]",
+                1,
+                6,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "trace",
+                "Analyze function call chains and dependencies",
+                "/trace <function> [--depth <n>]",
+                1,
+                4,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "architecture",
+                "View project architecture diagram and module dependencies",
+                "/architecture [--format <json|text>]",
+                0,
+                2,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "permissions",
+                "View current Agent permission state",
+                "/permissions",
+                0,
+                0,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "approve",
+                "View and manage pending approval requests",
+                "/approve <list|id>",
+                1,
+                1,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "memory-show",
+                "View project or session memory entries",
+                "/memory-show [scope]",
+                0,
+                1,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "memory-save",
+                "Save a memory entry to the Agent memory system",
+                "/memory-save <content> [--scope <scope>] [--type <type>] [--importance <level>]",
+                1,
+                8,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "memory-clear",
+                "Clear memory entries (soft-delete, recoverable)",
+                "/memory-clear <scope> [--confirm]",
+                1,
+                2,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "knowledge",
+                "View knowledge base status and sources",
+                "/knowledge",
+                0,
+                0,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "learn",
+                "Scan files or directories and save extracted knowledge as memory",
+                "/learn <path> [--recursive]",
+                1,
+                3,
+                InteractionCommandRoute::Runtime,
+            ),
+            // ── Cognitive commands (Phase 4) ──
+            (
+                "reason",
+                "Analyze a problem and produce a reasoning summary with evidence",
+                "/reason [question]",
+                0,
+                32,
+                InteractionCommandRoute::Agent,
+            ),
+            (
+                "think",
+                "Analyze a complex task, evaluate options, and recommend a solution",
+                "/think <task>",
+                1,
+                32,
+                InteractionCommandRoute::Agent,
+            ),
+            (
+                "hypothesis",
+                "Manage hypotheses with supporting and contradicting evidence",
+                "/hypothesis [topic]",
+                0,
+                32,
+                InteractionCommandRoute::Agent,
+            ),
+            (
+                "critic",
+                "Critique a solution or plan, find weaknesses, and score it",
+                "/critic [target]",
+                0,
+                32,
+                InteractionCommandRoute::Agent,
+            ),
+            (
+                "reflect",
+                "Reflect on a completed task, identify lessons learned",
+                "/reflect [task]",
+                0,
+                32,
+                InteractionCommandRoute::Agent,
+            ),
+            (
+                "decision",
+                "Record an architectural decision and generate an ADR",
+                "/decision [topic]",
+                0,
+                32,
+                InteractionCommandRoute::Agent,
+            ),
+            // ── Workflow commands ──
+            (
+                "workflow",
+                "Workflow management: list, show, or inspect workflow definitions and instances",
+                "/workflow [show <key>]",
+                0,
+                2,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "trigger",
+                "Event trigger management: list or create workflow triggers",
+                "/trigger [create <name>]",
+                0,
+                2,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "schedule",
+                "Schedule management: list or create scheduled workflows",
+                "/schedule [create <name> [cron <expr>]]",
+                0,
+                4,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "run",
+                "Manually run a workflow by key",
+                "/run <workflow-key> [--variables <json>]",
+                1,
+                4,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "observe",
+                "Observe workflow execution status and progress",
+                "/observe <instance-id>",
+                1,
+                1,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "retry",
+                "Retry a failed workflow from its last checkpoint",
+                "/retry <instance-id>",
+                1,
+                1,
+                InteractionCommandRoute::Runtime,
+            ),
+            // ── Agent Society commands (Phase 3) ──
+            (
+                "agents",
+                "View all agents, roles, organizations and teams in Agent Society",
+                "/agents",
+                0,
+                0,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "delegate",
+                "Delegate a task to an agent or role in the Agent Society",
+                "/delegate <task> [--role <role>] [--priority <p>]",
+                1,
+                6,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "team",
+                "Create, view, and manage Agent teams",
+                "/team <start|status|list|activate|complete|archive> [args]",
+                1,
+                4,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "roles",
+                "View all available roles and their capabilities",
+                "/roles",
+                0,
+                0,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "collaborate",
+                "View collaboration progress between team members",
+                "/collaborate [team-id]",
+                0,
+                1,
                 InteractionCommandRoute::Runtime,
             ),
         ] {

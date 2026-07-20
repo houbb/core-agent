@@ -1,5 +1,286 @@
 # CHANGELOG
 
+## [0.38.4] - 2026-07-20
+
+### P038 Phase 4: Agent Cognitive Runtime — 6 个认知命令
+
+实现 `design-docs/038-05-slash-p4-agent-conitive.md` 定义的 Phase 4 Agent Cognitive Runtime，
+让 Agent 从"任务执行器"升级为"具备分析、反思、决策能力的智能体"。
+
+#### 新命令
+
+| 命令 | 用法 | 功能 |
+|---|---|---|
+| `/reason` | `/reason [question]` | 问题分析，收集证据、识别原因、输出推理摘要 |
+| `/think` | `/think <task>` | 复杂任务分析，识别约束、生成选项、评估推荐 |
+| `/hypothesis` | `/hypothesis [topic]` | 假设管理，支持证据和反证 |
+| `/critic` | `/critic [target]` | 自我批判，发现弱点、安全问题、评分 |
+| `/reflect` | `/reflect [task]` | 反思学习，记录经验教训 |
+| `/decision` | `/decision [topic]` | 决策记录，自动生成 ADR 到 `docs/adr/` |
+
+#### 新增模块
+
+- `src/cognitive.rs` — Cognitive Engine，包含：
+  - `CognitiveCommand` 枚举 + 6 个命令的 Prompt 模板
+  - `AdrEntry` 数据模型 + Markdown 渲染 + 文件写入
+  - `CognitiveOutput` 结构化输出处理
+  - `/decision` → ADR 自动生成（`docs/adr/NNNN-title.md`）
+
+#### 架构变更
+
+- `src/slash/mod.rs` — 新增 `SlashCategory::Cognitive` 枚举变体
+- `src/interaction.rs` — 注册 6 个认知命令到 `with_builtins()`，新增 `cognitive_command()` 方法，`model_prompt()` 支持认知命令专用模板
+- `src/enterprise.rs` — `run_with_approval_inner` 中增加认知命令后处理（ADR 生成事件）
+- `src/lib.rs` — 导出 cognitive 模块
+
+#### 关键设计
+
+- 所有认知命令通过 `InteractionCommandRoute::Agent` 路由，调用模型分析
+- `/reason`/`/think`/`/hypothesis`/`/critic` 为只读命令，不触发文件变更
+- 结构化输出格式（非 CoT 思维链暴露）
+- `/decision` 自动创建 `docs/adr/` 目录并写入 Markdown 格式 ADR
+
+#### 测试
+
+- 16 个单元测试全部通过（Cognitive Engine: 12, ADR: 4）
+- 所有已有交互测试通过
+
+## [0.38.3] - 2026-07-20
+
+### P038 Phase 3: Agent Society Slash Commands — 5 个新命令
+
+实现 `design-docs/038-04-slash-p3-agent-society.md` 定义的 Phase 3 Agent Society 层，让 Agent 从"单打独斗"升级为"多 Agent 社会协作"。
+
+#### 新命令
+
+| 命令 | 用法 | 功能 |
+|---|---|---|
+| `/agents` | `/agents` | 查看 Agent Society 全景：组织、角色、团队、成员状态 |
+| `/delegate` | `/delegate <task> [--role <role>] [--priority <p>]` | 任务委派到指定角色/团队，支持优先级控制 |
+| `/team` | `/team start\|status\|list\|activate\|complete\|archive [args]` | 团队全生命周期管理 |
+| `/roles` | `/roles` | 查看所有可用角色及其能力要求 |
+| `/collaborate` | `/collaborate [team-id]` | 查看团队协作过程和 Collaboration 状态 |
+
+#### 架构变更
+
+- 新增 `SlashCategory::Society` 分类，归类到 society 类别
+- 所有命令通过 `InteractionCommandRoute::Runtime` 路由（零模型调用，即时响应）
+- 每个命令 struct 持有 `Arc<MultiAgentManager>` 状态注入
+- `EnterpriseAgent::execute_command()` 中直接路由到对应命令实现
+
+#### 核心设计
+
+- **Stateful 命令模式**：每个命令 struct 通过构造函数注入 `Arc<MultiAgentManager>`
+- **UML 风格输出**：`🧠 Planner (ready)` / `🛠 Coder (running)` 图标化显示
+- **与 `core-agent-multi` 完整打通**：Organization → Role → Team → Member → Collaboration 全链路
+
+#### 变更文件
+
+- `src/slash/mod.rs` — 新增 `SlashCategory::Society` 枚举变体 + `society_plugin` 模块
+- `src/slash/commands/agents.rs` — `/agents` 命令实现（含 3 个单元测试）
+- `src/slash/commands/delegate.rs` — `/delegate` 命令实现（含 5 个单元测试）
+- `src/slash/commands/team.rs` — `/team` 命令实现（含 7 个单元测试）
+- `src/slash/commands/roles.rs` — `/roles` 命令实现（含 2 个单元测试）
+- `src/slash/commands/collaborate.rs` — `/collaborate` 命令实现（含 3 个单元测试）
+- `src/slash/society_plugin.rs` — SocietyCommandPlugin 注册入口
+- `src/interaction.rs` — 注册 5 个 Society 命令到内置命令表
+- `src/enterprise.rs` — 实现 5 个命令的完整执行逻辑
+- `src/lib.rs` — 导出 SocietyCommandPlugin
+
+#### 测试
+
+- 20 个单元测试全部通过（agents: 3, delegate: 5, team: 7, roles: 2, collaborate: 3）
+- `cargo check` 编译通过
+
+## [0.38.6] - 2026-07-20
+
+### P038 Phase 6: Agent Observability & Evaluation Runtime — 6 个新命令
+
+实现 `design-docs/038-07-slash-p6-observe.md` 定义的 Phase 6 Observability & Evaluation 命令，让 Agent 从 Black Box 变为 Observable Intelligent System。
+
+#### 新命令
+
+- `/trace-agent [trace-id]` — Agent 执行链追踪，查看完整时间线和步骤
+- `/evaluate <trace-id>` — 多维度任务质量评估（Correctness/Safety/Efficiency/Maintainability）
+- `/benchmark [agent-id]` — 能力基准测试，5 个内置任务（coding/doc/arch/security/testing）
+- `/debug <trace-id>` — Agent 调试，定位失败根因并给出修复建议
+- `/replay <trace-id>` — 基于事件溯源的历史执行回放
+- `/score [agent-id]` — Agent 健康度仪表盘（成功率/平均评分/成本/延迟）
+
+#### 架构特点
+
+- 新增 `SlashCategory::Observability` 分类
+- SQLite 持久化存储（5 表：agent_trace / trace_step / tool_execution / evaluation / benchmark_result）
+- TraceCollector 自动采集 Agent 执行事件
+- EvaluationEngine 多维度规则评分（无需 LLM 调用）
+- DebugEngine 错误分类与根因分析（Permission/NotFound/Timeout/Invalid/RateLimit/Network）
+- ReplayEngine 事件溯源回放
+- CLI 新增 6 个子命令（trace-agent / evaluate / benchmark / debug / replay / score）
+- 与 EnterpriseAgent 的 execute_command 深度集成
+
+## [0.38.5] - 2026-07-20
+
+### P038 Phase 5: Workflow Runtime Slash Commands — 6 个新命令
+
+实现 `design-docs/038-06-slash-p5-workflow.md` 定义的 Phase 5 Workflow 命令，让 Agent 从 Interactive Agent 向 Autonomous Agent 演进，具备工作流管理、事件触发、定时任务、手动执行、运行观察和失败恢复能力。
+
+#### 新增命令
+
+| 命令 | 用法 | 功能 |
+|---|---|---|
+| `/workflow` | `/workflow [show <key>]` | 工作流管理：列表所有 Workflow 定义（名称/版本/状态），或 `show <key>` 查看详情 |
+| `/trigger` | `/trigger [create <name>]` | 事件触发管理：列出支持的触发器类型，`create <name>` 占位 |
+| `/schedule` | `/schedule [create <name> [cron <expr>]]` | 定时任务管理：列出调度任务，`create <name>` 占位 |
+| `/run` | `/run <workflow-key>` | 手动执行 Workflow，通过 `WorkflowManager::start()` 启动，返回 Instance ID |
+| `/observe` | `/observe <instance-id>` | 运行观察：展示 Stage/Activity/Action 完整进度和状态 |
+| `/retry` | `/retry <instance-id>` | 失败恢复：先创建 Snapshot 检查点，再通过 `WorkflowManager::resume()` 恢复 |
+
+#### 架构变更
+
+- 新增 `SlashCategory::Workflow` 分类，归类到 workflow 类别
+- 所有命令通过 `InteractionCommandRoute::Runtime` 路由（零模型调用，即时响应）
+- 直接复用 `EnterpriseRuntimes.workflows`（`Arc<WorkflowManager>`），与现有 `core-agent-workflow` 完整打通
+- `/run` 真实验证 Workflow 注册状态并启动，`/observe` 读取真实 Instance 进度数据，`/retry` 使用 Snapshot/Resume 机制
+
+#### 设计决策
+
+- **注入方式**：在 `execute_command` 中通过 `self.runtimes.workflows` 直接访问 WorkflowManager（已有引用）
+- **Trigger/Schedule 策略**：第一阶段占位命令，提示信息并预留接口，事件引擎后端后续实现
+- **Retry 策略**：先 `snapshot()` 创建检查点，再 `resume()` 恢复，不走简单重跑
+
+#### 变更文件
+
+- `src/slash/mod.rs` — 新增 `SlashCategory::Workflow` 枚举变体
+- `src/interaction.rs` — 注册 6 个 Workflow 命令到内置命令表
+- `src/enterprise.rs` — 实现 6 个命令的完整执行逻辑
+
+#### 测试
+
+- `cargo check` 通过（本项目无新增编译错误）
+
+### P038 Phase 2: Memory & Knowledge Runtime — 5 个新命令
+
+实现 `design-docs/038-03-slash-p2-memory.md` 定义的 Phase 2 Memory & Knowledge 命令，让 Agent 可以从"一次性 Coding Agent"升级为"长期进化的 Engineering Agent"。
+
+#### 新命令
+
+- `/memory-show [scope]` — 查看项目/会话记忆列表，支持 scope 过滤（project/session/all）
+- `/memory-save <content> [--scope] [--type] [--importance]` — 快速保存记忆，支持类型和重要性标记
+- `/memory-clear <scope> [--confirm]` — 清除记忆（软删除，通过 `MemoryManager.archive()` 标记为 Archived）
+- `/knowledge` — 查看知识库状态和存储信息
+- `/learn <path> [--recursive]` — 从文件/目录扫描知识，提取关键信息保存为记忆条目
+
+#### 架构特点
+
+- 全部使用 Runtime 路由（零模型调用），即时响应
+- 复用 `SlashCategory::Memory` 分类
+- 基于 `core-agent-memory` 完整实现（`MemoryManager`、`SqliteMemoryStore`、`StructuredMemoryRetriever`）
+- 软删除机制：`/memory-clear` 使用 `MemoryManager.archive()` 而非 `forget()`
+- 保持现有 `/memory` 命令向后兼容
+
+#### 决策记录
+
+- **输入方式**：`/memory-save` 支持直接参数模式，无参数时提示
+- **删除方式**：软删除（archive），可恢复
+- **知识库 MVP**：扫描文件提取关键信息存为记忆条目
+
+#### 新增文件
+
+- `src/slash/commands/memory_show.rs` — `/memory-show` 命令实现
+- `src/slash/commands/memory_save.rs` — `/memory-save` 命令实现，支持 --scope/--type/--importance
+- `src/slash/commands/memory_clear.rs` — `/memory-clear` 命令实现，支持 --confirm
+- `src/slash/commands/knowledge.rs` — `/knowledge` 命令实现
+- `src/slash/commands/learn.rs` — `/learn` 命令实现，支持 --recursive
+
+#### CLI 入口
+
+- 新增 `agent memory-show`, `agent memory-save`, `agent memory-clear`, `agent knowledge`, `agent learn` 顶层子命令
+
+#### 测试
+
+- 编译通过：`cargo check -p core-agent -p agent-cli` 0 error
+- 全量测试通过
+
+## [0.38.1] - 2026-07-20
+
+### P038 Phase 1: Code Intelligence & Tool Governance Runtime — 5 个新命令
+
+实现 `design-docs/038-02-slash-p1-search.md` 定义的 Phase 1，新增 5 个代码智能和治理命令，让 Agent 从"聊天 + 修改文件"升级为"理解整个工程 + 安全执行工程操作"。
+
+#### 新命令
+
+- `/search <query> [--type <lang>] [--kind <kind>]` — 代码符号搜索，基于 `code_index.query` 工具
+- `/trace <function> [--depth <n>]` — 函数调用链分析，基于 `callgraph.query` 工具
+- `/architecture [--format <json|text>]` — 项目架构图，基于 `architecture.graph` + `project.analyzer` 工具
+- `/permissions` — 查看当前 Agent 权限状态（PermissionMode、Memory 等）
+- `/approve <list|id>` — 查看和管理待审批操作
+
+#### 架构复用
+
+- 全部使用 Runtime 路由（零模型调用），即时响应
+- 复用 Phase 0.5 的 `SlashCommand` trait + `SlashCommandRegistry` 架构
+- 通过 `SlashCategory::Project` 和 `SlashCategory::Governance` 分类
+- 注册到 `InteractionCommandRegistry` 保持所有入口兼容
+
+#### 新增文件
+
+- `src/slash/commands/search.rs` — `/search` 命令实现，支持 --type/--kind/--path 过滤
+- `src/slash/commands/trace.rs` — `/trace` 命令实现，支持 --depth 深度控制
+- `src/slash/commands/architecture.rs` — `/architecture` 命令实现，支持 --format 输出格式
+- `src/slash/commands/permissions.rs` — `/permissions` 命令实现，只读查看
+- `src/slash/commands/approve.rs` — `/approve` 命令实现，支持 list/ID 审批
+
+#### CLI 入口
+
+- 新增 `agent search`, `agent trace`, `agent architecture`, `agent permissions`, `agent approve` 顶层子命令
+- 所有命令在 Chat 模式中通过 `/` 前缀也可使用
+
+#### 测试
+
+- 编译通过：`cargo check -p core-agent -p agent-cli` 0 error
+- 全量测试通过：`cargo test -p core-agent -p agent-cli` 全部通过
+
+## [0.38.0] - 2026-07-20
+
+### P038: Phase 0.5 Slash Runtime Foundation — 统一 Slash Command Runtime + 4 个新命令
+
+实现 `design-docs/038-00-slash-overview.md` 和 `design-docs/038-01-slash-p0-mvp.md` 定义的 Phase 0.5，建立统一的 Slash Command Runtime 基础设施，新增 4 个核心命令。
+
+#### 新架构：Slash Command Runtime
+
+- 新增 `SlashCommand` trait：`metadata()` → `category()` → `validate()` → `execute()` 完整生命周期接口
+- 新增 `SlashCommandRegistry`：在保留 `InteractionCommandRegistry` 向后兼容的基础上，支持插件式 `SlashCommand` 注册
+- 新增 `SlashCategory` 枚举：9 种分类体系（System/Session/Context/Project/Memory/Agent/Checkpoint/Governance/Developer）
+- 新增 `SlashCommandObserver` trait：命令执行事件监听（start/success/failure），用于审计和指标
+- 新增 `CommandMetadata`/`CommandContext`/`CommandOutput`/`CommandAction` 等核心类型
+
+#### 新命令
+
+- `/context` — 显示 Agent 上下文状态（当前支持占位输出，后续可对接 `ContextRuntime` 展示 token 用量）
+- `/compact` — 手动触发上下文压缩，基于 `SummaryReducer` 的 last-N + extractive summary 策略
+- `/resume <session-id>` — 恢复已暂停的会话，重新加载上下文（连接 `SessionRuntime::resume_session()`）
+- `/checkpoint <save|list|restore>` — 创建/列出/恢复命名 checkpoint，比 undo/redo 更显式
+
+#### CLI 入口更新
+
+- 新增 `CliCommand::Compact` 和 `CliCommand::Checkpoint` CLI 子命令
+- 新命令通过 `professional.execute_line()` 统一路由到 `EnterpriseAgent::execute_command()`
+- 保持与现有 TUI/Desktop 自动补全兼容
+
+#### 新增文件
+
+- `src/slash/mod.rs` — Slash Command Runtime 核心基础设施
+- `src/slash/commands/mod.rs` — 命令模块导出
+- `src/slash/commands/context.rs` — `/context` 命令实现
+- `src/slash/commands/compact.rs` — `/compact` 命令实现
+- `src/slash/commands/resume.rs` — `/resume` 命令实现
+- `src/slash/commands/checkpoint.rs` — `/checkpoint` 命令实现（save/list/restore 子命令）
+
+#### 测试
+
+- 编译通过：`cargo check -p core-agent` + `cargo check -p agent-cli` 0 error
+- 全量测试通过：`cargo test -p core-agent` 75 个 + `cargo test -p agent-cli` 5 个
+
 ## [0.37.0] - 2026-07-20
 
 ### P037: Context Annotation Runtime — 上下文注解/引用能力

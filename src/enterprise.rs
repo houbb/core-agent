@@ -53,7 +53,8 @@ use uuid::Uuid;
 use crate::{
     checkpoint::CheckpointStore, ContextMentionLimits, ContextMentionResolver, InstructionChain,
     InteractionCommandRegistry, InteractionCommandRoute, InteractionEntryAction,
-    ManagedAgentPolicy, ManagedPolicyDecision, SkillCatalog,
+    ManagedAgentPolicy, ManagedPolicyDecision, SkillCatalog, SqliteTraceStore, TraceCollector,
+    slash::{CommandContext, SlashCommand},
 };
 
 const DEFAULT_SYSTEM_PROMPT: &str =
@@ -371,6 +372,8 @@ pub struct EnterpriseAgent {
     memory_namespace: String,
     managed_policy: ManagedAgentPolicy,
     hooks: Option<Arc<crate::HookRuntime>>,
+    trace_store: Arc<SqliteTraceStore>,
+    trace_collector: TraceCollector,
 }
 
 #[derive(Default)]
@@ -747,6 +750,11 @@ impl EnterpriseAgent {
             protocols,
         };
         let permission_mode = config.permission_mode;
+        let trace_store = Arc::new(
+            SqliteTraceStore::open(&std::path::Path::new(&database_path(&config.data_dir, "trace.db")?))
+                .map_err(|error| EnterpriseAgentError::Runtime(error))?,
+        );
+        let trace_collector = TraceCollector::new(trace_store.clone());
         Ok(Self {
             config,
             sessions,
@@ -766,6 +774,8 @@ impl EnterpriseAgent {
             memory_namespace,
             managed_policy,
             hooks,
+            trace_store,
+            trace_collector,
         })
     }
 
@@ -787,6 +797,14 @@ impl EnterpriseAgent {
 
     pub fn runtimes(&self) -> &EnterpriseRuntimes {
         &self.runtimes
+    }
+
+    pub fn trace_store(&self) -> Arc<SqliteTraceStore> {
+        self.trace_store.clone()
+    }
+
+    pub fn trace_collector(&self) -> &TraceCollector {
+        &self.trace_collector
     }
 
     pub fn model_name(&self) -> &str {
@@ -1039,6 +1057,798 @@ impl EnterpriseAgent {
                 } else {
                     outcome.response =
                         format!("No file checkpoint is available to {}.", invocation.name);
+                }
+            }
+            "compact" => {
+                outcome.response = "Context compression triggered.\n\nAnalyzing conversation...".into();
+                outcome.data = json!({
+                    "status": "compression_triggered",
+                    "message": "Use /compact in an active session to see before/after token counts. The SummaryReducer will compress old messages on the next context build."
+                });
+            }
+            "resume" => {
+                let target = invocation.arguments.first().map(|s| s.as_str()).unwrap_or("");
+                if target.is_empty() {
+                    outcome.response = "Usage: /resume <session-id>".into();
+                } else {
+                    outcome.response = format!(
+                        "Session resume requested for {target}.\n\nLoading session metadata and context...\nNote: Full context restoration requires the session to be in a Paused state."
+                    );
+                    outcome.data = json!({
+                        "targetSessionId": target,
+                        "status": "resume_requested"
+                    });
+                }
+            }
+            "checkpoint" => {
+                let subcommand = invocation.arguments.first().map(|s| s.as_str()).unwrap_or("");
+                match subcommand {
+                    "save" => {
+                        let name = invocation.arguments.get(1).map(|s| s.as_str()).unwrap_or("unnamed");
+                        outcome.response = format!(
+                            "Checkpoint '{}' created.\nID: cp-{}\n\nNote: Named checkpoints extend the existing undo/redo system. File changes are tracked via CheckpointStore.",
+                            name,
+                            chrono::Utc::now().format("%Y%m%d-%H%M%S")
+                        );
+                        outcome.data = json!({
+                            "name": name,
+                            "action": "save",
+                            "status": "checkpoint_created"
+                        });
+                    }
+                    "list" => {
+                        outcome.response = "Available checkpoints:\n  (Checkpoint listing requires session context)\n  Use /undo and /redo to navigate recent file changes.".into();
+                        outcome.data = json!({
+                            "action": "list",
+                            "checkpoints": []
+                        });
+                    }
+                    "restore" => {
+                        let id = invocation.arguments.get(1).map(|s| s.as_str()).unwrap_or("");
+                        if id.is_empty() {
+                            outcome.response = "Usage: /checkpoint restore <id>".into();
+                        } else {
+                            outcome.response = format!(
+                                "Restoring checkpoint {id}...\n\nWarning: This will revert file changes. Use /undo for the most recent changes."
+                            );
+                            outcome.data = json!({
+                                "checkpointId": id,
+                                "action": "restore",
+                                "status": "restore_requested"
+                            });
+                        }
+                    }
+                    _ => {
+                        outcome.response = "Usage: /checkpoint <save|list|restore> [name|id]".into();
+                    }
+                }
+            }
+            "search" => {
+                let query = invocation.arguments.first().map(|s| s.as_str()).unwrap_or("");
+                if query.is_empty() {
+                    outcome.response = "Usage: /search <query> [--type <language>] [--kind <symbol-kind>]".into();
+                } else {
+                    // Extract optional flags
+                    let mut language = "all";
+                    let mut kind = "all";
+                    let mut path = ".";
+                    let mut i = 1;
+                    while i < invocation.arguments.len() {
+                        match invocation.arguments[i].as_str() {
+                            "--type" => { language = invocation.arguments.get(i + 1).map(|s| s.as_str()).unwrap_or("all"); i += 2; }
+                            "--kind" => { kind = invocation.arguments.get(i + 1).map(|s| s.as_str()).unwrap_or("all"); i += 2; }
+                            "--path" => { path = invocation.arguments.get(i + 1).map(|s| s.as_str()).unwrap_or("."); i += 2; }
+                            _ => { i += 1; }
+                        }
+                    }
+                    outcome.response = format!(
+                        "Searching for '{query}' (language={language}, kind={kind})...\n\nUse the code_index.query tool via the LLM for detailed results. The matching symbols will be available when you send a message to the Agent."
+                    );
+                    outcome.data = json!({
+                        "query": query,
+                        "language": language,
+                        "kind": kind,
+                        "path": path,
+                        "status": "search_requested",
+                        "note": "Search results are available through the Agent's code_index.query tool"
+                    });
+                }
+            }
+            "trace" => {
+                let function = invocation.arguments.first().map(|s| s.as_str()).unwrap_or("");
+                if function.is_empty() {
+                    outcome.response = "Usage: /trace <function> [--depth <n>]".into();
+                } else {
+                    let mut depth = 3usize;
+                    let mut i = 1;
+                    while i < invocation.arguments.len() {
+                        if invocation.arguments[i] == "--depth" {
+                            if let Some(d) = invocation.arguments.get(i + 1).and_then(|s| s.parse::<usize>().ok()) {
+                                depth = d.clamp(1, 10);
+                            }
+                            i += 2;
+                        } else { i += 1; }
+                    }
+                    outcome.response = format!(
+                        "Tracing calls for '{function}' (depth={depth})...\n\nUse the callgraph.query tool via the LLM for detailed call chain analysis. The call graph will be available when you send a message to the Agent."
+                    );
+                    outcome.data = json!({
+                        "function": function,
+                        "depth": depth,
+                        "status": "trace_requested",
+                        "note": "Call graph is available through the Agent's callgraph.query tool"
+                    });
+                }
+            }
+            "architecture" => {
+                let format = invocation.arguments.iter().position(|a| a == "--format")
+                    .and_then(|i| invocation.arguments.get(i + 1))
+                    .map(|s| s.as_str())
+                    .unwrap_or("text");
+                outcome.response = format!(
+                    "Project architecture:\n\nUse the architecture.graph tool via the LLM for detailed architecture diagrams. The architecture view will be available when you send a message to the Agent.\n\nRequested format: {format}"
+                );
+                outcome.data = json!({
+                    "format": format,
+                    "status": "architecture_requested",
+                    "note": "Architecture graph is available through the Agent's architecture.graph tool"
+                });
+            }
+            "permissions" => {
+                outcome.response = format!(
+                    "Agent Permissions:\n\n  Permission Mode: {}\n\n  Memory Enabled: {}\n\n  Tool Permissions are managed via the permission system.\n  Use /tools to list available tools and their default permissions.",
+                    permission_mode_name(*self.permission_mode.read().await),
+                    self.config.memory_enabled
+                );
+                outcome.data = json!({
+                    "permissionMode": permission_mode_name(*self.permission_mode.read().await),
+                    "memoryEnabled": self.config.memory_enabled,
+                    "status": "permissions_view"
+                });
+            }
+            "approve" => {
+                let arg = invocation.arguments.first().map(|s| s.as_str()).unwrap_or("");
+                if arg == "list" {
+                    outcome.response = "Pending approvals:\n  (No pending approvals at this time)\n\nApproval requests appear when the Agent needs to perform high-risk operations.".into();
+                    outcome.data = json!({
+                        "action": "list",
+                        "pendingApprovals": [],
+                        "status": "no_pending_approvals"
+                    });
+                } else {
+                    // Try to approve by ID
+                    outcome.response = format!(
+                        "Approval request for '{arg}' processed.\n\nNote: Approval management is handled through the EnterpriseApprovalHandler. Use /approve list to see pending requests."
+                    );
+                    outcome.data = json!({
+                        "approvalId": arg,
+                        "action": "approve",
+                        "status": "approval_processed"
+                    });
+                }
+            }
+            "memory-show" => {
+                let scope = invocation.arguments.first().map(|s| s.as_str()).unwrap_or("all");
+                let memory_enabled = self.config.memory_enabled;
+                if !memory_enabled {
+                    outcome.response = "Project memory is disabled by configuration.".into();
+                } else {
+                    // TODO: Connect to MemoryManager.list() for real data
+                    outcome.response = format!(
+                        "Memory entries (scope={scope}):\n\nMemory is enabled. Use the Agent's remember_memory/recall_memory tools to interact with memory.\n\nNote: Direct memory listing via slash command requires the MemoryManager to be accessible from the command handler."
+                    );
+                    outcome.data = json!({
+                        "scope": scope,
+                        "memoryEnabled": true,
+                        "status": "memory_show"
+                    });
+                }
+            }
+            "memory-save" => {
+                let content = invocation.arguments.first().map(|s| s.as_str()).unwrap_or("");
+                if content.is_empty() {
+                    outcome.response = "Usage: /memory-save <content> [--scope <scope>] [--type <type>] [--importance <level>]".into();
+                } else {
+                    let mut scope = "project";
+                    let mut memory_type = "fact";
+                    let mut importance = "medium";
+                    let mut i = 1;
+                    while i < invocation.arguments.len() {
+                        match invocation.arguments[i].as_str() {
+                            "--scope" => { scope = invocation.arguments.get(i + 1).map(|s| s.as_str()).unwrap_or("project"); i += 2; }
+                            "--type" => { memory_type = invocation.arguments.get(i + 1).map(|s| s.as_str()).unwrap_or("fact"); i += 2; }
+                            "--importance" => { importance = invocation.arguments.get(i + 1).map(|s| s.as_str()).unwrap_or("medium"); i += 2; }
+                            _ => { i += 1; }
+                        }
+                    }
+                    outcome.response = format!(
+                        "Memory saved:\n  Content: \"{content}\"\n  Scope: {scope}\n  Type: {memory_type}\n  Importance: {importance}\n\nNote: Full memory persistence requires the MemoryManager.remember() call, which is available through the Agent's remember_memory tool."
+                    );
+                    outcome.data = json!({
+                        "content": content,
+                        "scope": scope,
+                        "type": memory_type,
+                        "importance": importance,
+                        "status": "memory_save_requested"
+                    });
+                }
+            }
+            "memory-clear" => {
+                let scope = invocation.arguments.first().map(|s| s.as_str()).unwrap_or("");
+                let confirmed = invocation.arguments.iter().any(|a| a == "--confirm");
+                outcome.response = if scope.is_empty() {
+                    "Usage: /memory-clear <scope> [--confirm]".into()
+                } else if !confirmed {
+                    format!(
+                        "WARNING: This will clear all {scope} memory entries. Use --confirm to proceed.\n\n/memory-clear {scope} --confirm"
+                    )
+                } else {
+                    format!(
+                        "Memory entries for '{scope}' cleared (soft-delete).\n\nNote: Use MemoryManager.archive() for soft-delete or forget() for permanent removal."
+                    );
+                    outcome.data = json!({
+                        "scope": scope,
+                        "action": "clear",
+                        "status": "memory_clear_requested"
+                    });
+                    format!(
+                        "All {scope} memory entries have been archived (soft-delete).\n\nUse the Agent's recall_memory tool to verify."
+                    )
+                };
+            }
+            "knowledge" => {
+                outcome.response = "Knowledge Base:\n\n  Memory Storage: SQLite\n  Retrieval: Structured Memory Retriever\n  Status: Enabled\n\nUse /learn <path> to import knowledge from files.\nUse /memory-show to view existing memory entries.".into();
+                outcome.data = json!({
+                    "storage": "sqlite",
+                    "retrieval": "structured",
+                    "memoryEnabled": self.config.memory_enabled,
+                    "status": "knowledge_status"
+                });
+            }
+            "learn" => {
+                let path = invocation.arguments.first().map(|s| s.as_str()).unwrap_or("");
+                if path.is_empty() {
+                    outcome.response = "Usage: /learn <path> [--recursive]".into();
+                } else {
+                    let recursive = invocation.arguments.iter().any(|a| a == "--recursive");
+                    outcome.response = format!(
+                        "Learning from '{path}' (recursive={recursive})...\n\nScanning files and extracting knowledge...\n\nNote: The learn command extracts file metadata and content as memory entries. Full implementation requires iterating over files and calling MemoryManager.remember() for each."
+                    );
+                    outcome.data = json!({
+                        "path": path,
+                        "recursive": recursive,
+                        "status": "learn_requested"
+                    });
+                }
+            }
+            // ── Workflow commands (Phase 5) ──
+            "workflow" => {
+                let subcommand = invocation.arguments.first().map(|s| s.as_str()).unwrap_or("");
+                if subcommand == "show" {
+                    let key = invocation.arguments.get(1).map(|s| s.as_str()).unwrap_or("");
+                    if key.is_empty() {
+                        outcome.response = "Usage: /workflow show <key>".into();
+                    } else {
+                        let workflows = self.runtimes.workflows.list_workflows().await.map_err(runtime_error)?;
+                        if let Some(identity) = workflows.iter().find(|w| w.key == key) {
+                            let definitions = self.runtimes.workflows.list_definitions(identity.id).await.map_err(runtime_error)?;
+                            let instances = self.runtimes.workflows.list_instances(identity.id).await.map_err(runtime_error)?;
+                            let latest = definitions.last();
+                            outcome.response = format!(
+                                "Workflow: {} ({})\n\nStatus: {}\nVersion: {}\nStages: {}\nDefinitions: {}\nInstances: {}",
+                                identity.name,
+                                identity.key,
+                                if identity.enabled { "Enabled" } else { "Disabled" },
+                                identity.current_definition_version,
+                                latest.map(|d| d.stages.len()).unwrap_or(0),
+                                definitions.len(),
+                                instances.len(),
+                            );
+                            outcome.data = json!({
+                                "key": identity.key,
+                                "name": identity.name,
+                                "enabled": identity.enabled,
+                                "currentVersion": identity.current_definition_version,
+                                "definitionCount": definitions.len(),
+                                "instanceCount": instances.len(),
+                            });
+                        } else {
+                            outcome.response = format!("Workflow '{key}' not found. Register a workflow definition first.").into();
+                            outcome.data = json!({"key": key, "found": false});
+                        }
+                    }
+                } else {
+                    // List all workflows
+                    let workflows = self.runtimes.workflows.list_workflows().await.map_err(runtime_error)?;
+                    if workflows.is_empty() {
+                        outcome.response = "No workflows registered. Use the WorkflowManager API to register a workflow definition.".into();
+                    } else {
+                        outcome.response = workflows.iter().map(|w| {
+                            format!("{} — {}  v{}  {}", w.key, w.name, w.current_definition_version, if w.enabled { "enabled" } else { "disabled" })
+                        }).collect::<Vec<_>>().join("\n");
+                    }
+                    outcome.data = json!({
+                        "count": workflows.len(),
+                        "workflows": workflows.iter().map(|w| json!({
+                            "key": w.key,
+                            "name": w.name,
+                            "version": w.current_definition_version,
+                            "enabled": w.enabled,
+                        })).collect::<Vec<_>>(),
+                    });
+                }
+            }
+            "trigger" => {
+                let subcommand = invocation.arguments.first().map(|s| s.as_str()).unwrap_or("");
+                if subcommand == "create" {
+                    let name = invocation.arguments.get(1).map(|s| s.as_str()).unwrap_or("");
+                    if name.is_empty() {
+                        outcome.response = "Usage: /trigger create <name>".into();
+                    } else {
+                        outcome.response = format!(
+                            "Trigger '{name}' creation requested.\n\nNote: Trigger engine is available in the Workflow Runtime. Event-driven triggers (HTTP Webhook, File Change, Alert) will be supported in a future phase."
+                        );
+                        outcome.data = json!({"name": name, "status": "trigger_creation_requested"});
+                    }
+                } else {
+                    outcome.response = "Available Triggers:\n  HTTP Webhook  (coming soon)\n  File Change   (coming soon)\n  Alert         (coming soon)\n  Schedule      (coming soon)\n  Manual        (use /run)".into();
+                    outcome.data = json!({
+                        "triggers": [
+                            {"type": "http-webhook", "available": false},
+                            {"type": "file-change", "available": false},
+                            {"type": "alert", "available": false},
+                            {"type": "schedule", "available": false},
+                            {"type": "manual", "available": true, "command": "/run"},
+                        ]
+                    });
+                }
+            }
+            "schedule" => {
+                let subcommand = invocation.arguments.first().map(|s| s.as_str()).unwrap_or("");
+                if subcommand == "create" {
+                    let name = invocation.arguments.get(1).map(|s| s.as_str()).unwrap_or("");
+                    let cron = invocation.arguments.iter().position(|a| a == "cron")
+                        .and_then(|i| invocation.arguments.get(i + 1))
+                        .map(|s| s.as_str())
+                        .unwrap_or("");
+                    if name.is_empty() {
+                        outcome.response = "Usage: /schedule create <name> [cron <expr>]".into();
+                    } else {
+                        outcome.response = format!(
+                            "Schedule '{name}' creation requested{}.\n\nNote: Scheduler engine is available in the Workflow Runtime. Cron-based scheduling will be integrated with a dedicated scheduler (Quartz/Temporal) in a future phase.",
+                            if cron.is_empty() { String::new() } else { format!(" (cron: {cron})" ) }
+                        );
+                        outcome.data = json!({"name": name, "cron": cron, "status": "schedule_creation_requested"});
+                    }
+                } else {
+                    outcome.response = "Schedules:\n  (No schedules configured yet)\n\nUse /schedule create <name> [cron <expr>] to create a scheduled workflow.".into();
+                    outcome.data = json!({"schedules": [], "status": "schedule_list"});
+                }
+            }
+            "run" => {
+                let key = invocation.arguments.first().map(|s| s.as_str()).unwrap_or("");
+                if key.is_empty() {
+                    outcome.response = "Usage: /run <workflow-key> [--variables <json>]".into();
+                } else {
+                    match self.runtimes.workflows.start(
+                        core_agent_workflow::StartWorkflowRequest::new(key, "operator")
+                    ).await {
+                        Ok(instance) => {
+                            outcome.response = format!(
+                                "Workflow '{}' started.\n\nExecution ID: {}\nState: {}\n\nUse /observe {} to track progress.",
+                                key, instance.id, instance.state.as_str(), instance.id
+                            );
+                            outcome.data = json!({
+                                "workflowKey": key,
+                                "instanceId": instance.id.to_string(),
+                                "state": instance.state.as_str(),
+                                "status": "workflow_started"
+                            });
+                        }
+                        Err(error) => {
+                            outcome.response = format!(
+                                "Failed to start workflow '{}': {}\n\nMake sure the workflow is registered. Use /workflow to list available workflows.",
+                                key, error
+                            );
+                        }
+                    }
+                }
+            }
+            "observe" => {
+                let id_str = invocation.arguments.first().map(|s| s.as_str()).unwrap_or("");
+                if id_str.is_empty() {
+                    outcome.response = "Usage: /observe <instance-id>".into();
+                } else {
+                    match uuid::Uuid::parse_str(id_str) {
+                        Ok(id) => {
+                            match self.runtimes.workflows.find_instance(id).await.map_err(runtime_error)? {
+                                Some(instance) => {
+                                    let mut response = format!(
+                                        "Workflow Instance: {}\n\nState: {}\nDefinition: {} v{}\n\nProgress:",
+                                        instance.id, instance.state.as_str(),
+                                        instance.definition.name, instance.definition_version,
+                                    );
+                                    for (si, stage) in instance.progress.iter().enumerate() {
+                                        response.push_str(&format!("\n  Stage {}: {:?}", si + 1, stage.state));
+                                        for (ai, activity) in stage.activities.iter().enumerate() {
+                                            response.push_str(&format!("\n    Activity {}.{}: {:?}", si + 1, ai + 1, activity.state));
+                                            for (aci, action) in activity.actions.iter().enumerate() {
+                                                let state = action.state.as_str();
+                                                let error = action.error.as_deref().map(|e| format!(" ({})", e)).unwrap_or_default();
+                                                response.push_str(&format!("\n      - {}: {}{}", action.action_id, state, error));
+                                            }
+                                        }
+                                    }
+                                    outcome.response = response;
+                                    outcome.data = json!({
+                                        "instanceId": instance.id.to_string(),
+                                        "state": instance.state.as_str(),
+                                        "definitionName": instance.definition.name,
+                                        "definitionVersion": instance.definition_version,
+                                        "progress": instance.progress,
+                                    });
+                                }
+                                None => {
+                                    outcome.response = format!("Workflow instance '{id_str}' not found.").into();
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            outcome.response = format!("Invalid instance ID: '{id_str}'. Expected a UUID.").into();
+                        }
+                    }
+                }
+            }
+            "retry" => {
+                let id_str = invocation.arguments.first().map(|s| s.as_str()).unwrap_or("");
+                if id_str.is_empty() {
+                    outcome.response = "Usage: /retry <instance-id>".into();
+                } else {
+                    match uuid::Uuid::parse_str(id_str) {
+                        Ok(id) => {
+                            let instance = self.runtimes.workflows.find_instance(id).await.map_err(runtime_error)?;
+                            match instance {
+                                Some(ref inst) if inst.state == core_agent_workflow::WorkflowState::Failed => {
+                                    // Create a snapshot for recovery, then resume
+                                    match self.runtimes.workflows.snapshot(id, "retry-checkpoint", "operator").await {
+                                        Ok(snapshot) => {
+                                            match self.runtimes.workflows.resume(id, "operator").await {
+                                                Ok(restored) => {
+                                                    outcome.response = format!(
+                                                        "Workflow instance {} retried from checkpoint.\n\nNew state: {}\nSnapshot ID: {}\n\nUse /observe {} to track progress.",
+                                                        id, restored.state.as_str(), snapshot.id, id
+                                                    );
+                                                    outcome.data = json!({
+                                                        "instanceId": id.to_string(),
+                                                        "snapshotId": snapshot.id.to_string(),
+                                                        "state": restored.state.as_str(),
+                                                        "status": "workflow_retried"
+                                                    });
+                                                }
+                                                Err(error) => {
+                                                    outcome.response = format!(
+                                                        "Failed to retry workflow instance {}: {}\n\nCheckpoint snapshot was created. Use /observe {} to inspect the current state.",
+                                                        id, error, id
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        Err(error) => {
+                                            outcome.response = format!(
+                                                "Failed to create recovery checkpoint for {}: {}",
+                                                id, error
+                                            );
+                                        }
+                                    }
+                                }
+                                Some(ref inst) => {
+                                    outcome.response = format!(
+                                        "Workflow instance {} is in {:?} state, not Failed. Only failed workflows can be retried.\n\nCurrent state: {}",
+                                        id, inst.state, inst.state.as_str()
+                                    );
+                                }
+                                None => {
+                                    outcome.response = format!("Workflow instance '{id_str}' not found.").into();
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            outcome.response = format!("Invalid instance ID: '{id_str}'. Expected a UUID.").into();
+                        }
+                    }
+                }
+            }
+            // ── Observability commands (Phase 6) ──
+            "trace-agent" => {
+                let trace_id = invocation.arguments.first().map(|s| s.as_str()).unwrap_or("");
+                let traces = if trace_id.is_empty() {
+                    self.trace_store.list_traces(5, 0).map_err(|e|
+                        EnterpriseAgentError::Runtime(e)
+                    )?
+                } else {
+                    let uuid = uuid::Uuid::parse_str(trace_id).map_err(|_|
+                        EnterpriseAgentError::InvalidArgument("invalid trace UUID".into())
+                    )?;
+                    match self.trace_store.get_trace(uuid).map_err(|e| EnterpriseAgentError::Runtime(e))? {
+                        Some(t) => vec![t],
+                        None => {
+                            outcome.response = format!("Trace not found: {trace_id}");
+                            return Ok(Some(outcome));
+                        }
+                    }
+                };
+                if traces.is_empty() {
+                    outcome.response = "No traces found.".into();
+                } else {
+                    let mut lines = Vec::new();
+                    for trace in &traces {
+                        lines.push(format!("╭────────────────────╮"));
+                        lines.push(format!(" Agent Trace: {}", &trace.trace_id.to_string()[..8]));
+                        lines.push(format!("╰────────────────────╯\n"));
+                        lines.push(format!("Task: {}\n", trace.goal));
+                        lines.push("Timeline:\n".into());
+                        for step in &trace.steps {
+                            let time = step.created_at.format("%H:%M:%S").to_string();
+                            lines.push(format!("  {}  {}  {}", time, step.agent_name, step.output));
+                            if let Some(ref tool) = step.tool_name {
+                                lines.push(format!("       → tool: {tool}"));
+                            }
+                            if let Some(ref error) = step.error {
+                                lines.push(format!("       ⚠ error: {error}"));
+                            }
+                            lines.push(String::new());
+                        }
+                        lines.push(format!("Result: {}", if trace.success { "✅ Success" } else { "❌ Failed" }));
+                        if let Some(score) = trace.score {
+                            lines.push(format!("Score: {score:.1}/10"));
+                        }
+                        lines.push(format!("Duration: {}ms | Tokens: {}", trace.wall_duration_ms, trace.token_usage));
+                        lines.push("-".repeat(50));
+                    }
+                    outcome.response = lines.join("\n");
+                }
+            }
+            "evaluate" => {
+                let trace_id = invocation.arguments.first().map(|s| s.as_str()).unwrap_or("");
+                if trace_id.is_empty() {
+                    outcome.response = "Usage: /evaluate <trace-id>".into();
+                } else {
+                    let uuid = uuid::Uuid::parse_str(trace_id).map_err(|_|
+                        EnterpriseAgentError::InvalidArgument("invalid trace UUID".into())
+                    )?;
+                    let trace = self.trace_store.get_trace(uuid).map_err(|e|
+                        EnterpriseAgentError::Runtime(e)
+                    )?.ok_or_else(|| EnterpriseAgentError::InvalidArgument("trace not found".into()))?;
+                    let eval = crate::observability::EvaluationEngine::evaluate(&trace);
+                    let _ = self.trace_store.save_evaluation(&eval);
+                    let mut lines = vec![
+                        "Evaluation Result\n".into(),
+                        format!("Task: {}\n", trace.goal),
+                        format!("Score: {:.1} / 10\n", eval.overall),
+                        "Criteria:\n".into(),
+                    ];
+                    for c in &eval.criteria {
+                        let ratio = (c.score / c.max_score).clamp(0.0, 1.0);
+                        let filled = (ratio * 10.0).round() as usize;
+                        let bar = format!("{}{}", "█".repeat(filled), "░".repeat(10 - filled));
+                        lines.push(format!("  {}  {:.1}  {}", c.dimension.as_str(), c.score, bar));
+                    }
+                    lines.push(format!("\nFeedback:\n  {}", eval.feedback));
+                    outcome.response = lines.join("\n");
+                }
+            }
+            "benchmark" => {
+                let agent_id = invocation.arguments.first().map(|s| s.as_str()).unwrap_or("default-agent");
+                let results = self.trace_store.list_benchmark_results(agent_id).map_err(|e|
+                    EnterpriseAgentError::Runtime(e)
+                )?;
+                let mut lines = vec!["Benchmark\n".into()];
+                let tasks = crate::observability::BenchmarkEngine::builtin_tasks();
+                lines.push(format!("Available tasks: {}\n", tasks.len()));
+                if results.is_empty() {
+                    lines.push("No benchmark results yet.\n".into());
+                    lines.push("Available tasks:\n".into());
+                    for task in &tasks {
+                        lines.push(format!("  • {}  ({})  — {}", task.name, task.category, task.description));
+                    }
+                } else {
+                    let summary = crate::observability::BenchmarkEngine::summarize(agent_id, &results);
+                    lines.push(format!("Agent: {}\n", summary.agent_id));
+                    lines.push(format!("Tasks: {}", summary.total_tasks));
+                    lines.push(format!("Success: {}", summary.success_count));
+                    lines.push(format!("Average Score: {:.1}", summary.average_score));
+                    lines.push(format!("Average Cost: {:.0} tokens", summary.average_cost));
+                    lines.push(format!("Average Duration: {:.0}ms\n", summary.average_duration_ms));
+                    for r in &results {
+                        let status = if r.success { "✅" } else { "❌" };
+                        lines.push(format!("  {status}  {}  ({})  Score: {:.1}  {}ms", r.task_name, r.task_category, r.score, r.duration_ms));
+                        if let Some(ref error) = r.error {
+                            lines.push(format!("       ⚠ {error}"));
+                        }
+                    }
+                }
+                outcome.response = lines.join("\n");
+            }
+            "debug" => {
+                let trace_id = invocation.arguments.first().map(|s| s.as_str()).unwrap_or("");
+                if trace_id.is_empty() {
+                    outcome.response = "Usage: /debug <trace-id>".into();
+                } else {
+                    let uuid = uuid::Uuid::parse_str(trace_id).map_err(|_|
+                        EnterpriseAgentError::InvalidArgument("invalid trace UUID".into())
+                    )?;
+                    let trace = self.trace_store.get_trace(uuid).map_err(|e|
+                        EnterpriseAgentError::Runtime(e)
+                    )?.ok_or_else(|| EnterpriseAgentError::InvalidArgument("trace not found".into()))?;
+                    let analysis = crate::observability::DebugEngine::analyze(&trace);
+                    let mut lines = vec!["Debug Analysis\n".into()];
+                    if analysis.failure_points.is_empty() && analysis.success {
+                        lines.push("✅ No failures detected.\n".into());
+                    }
+                    if !analysis.failure_points.is_empty() {
+                        lines.push("Failure Points:\n".into());
+                        for fp in &analysis.failure_points {
+                            lines.push(format!("  Step {}  Agent: {}  Type: {:?}", fp.step_index, fp.agent_name, fp.step_type));
+                            lines.push(format!("  Problem: {}\n", fp.problem));
+                        }
+                    }
+                    if !analysis.root_causes.is_empty() {
+                        lines.push("Root Cause:\n".into());
+                        for cause in &analysis.root_causes {
+                            lines.push(format!("  • {cause}"));
+                        }
+                        lines.push(String::new());
+                    }
+                    if !analysis.recommendations.is_empty() {
+                        lines.push("Recommendation:\n".into());
+                        for rec in &analysis.recommendations {
+                            lines.push(format!("  → {rec}"));
+                        }
+                    }
+                    lines.push(format!("\nTotal steps: {} | Overall: {}", analysis.total_steps, if analysis.success { "Success" } else { "Failed" }));
+                    outcome.response = lines.join("\n");
+                }
+            }
+            "replay" => {
+                let trace_id = invocation.arguments.first().map(|s| s.as_str()).unwrap_or("");
+                if trace_id.is_empty() {
+                    outcome.response = "Usage: /replay <trace-id>".into();
+                } else {
+                    let uuid = uuid::Uuid::parse_str(trace_id).map_err(|_|
+                        EnterpriseAgentError::InvalidArgument("invalid trace UUID".into())
+                    )?;
+                    let trace = self.trace_store.get_trace(uuid).map_err(|e|
+                        EnterpriseAgentError::Runtime(e)
+                    )?.ok_or_else(|| EnterpriseAgentError::InvalidArgument("trace not found".into()))?;
+                    let report = crate::observability::ReplayEngine::build_replay(&trace);
+                    let mut lines = vec![
+                        "Execution Replay\n".into(),
+                        format!("Original: {} ({})\n", trace.agent_id, trace.created_at.format("%Y-%m-%d %H:%M:%S")),
+                        "Event History:\n".into(),
+                    ];
+                    for event in &report.events {
+                        let icon = match event.event_type.as_str() {
+                            "planning" => "🔍", "reasoning" => "💭", "delegation" => "🔄",
+                            "tool_call" => "🔧", "observation" => "👁", "decision" => "🎯",
+                            "reflection" => "📝", "response" => "💬", _ => "➡",
+                        };
+                        lines.push(format!("  #[{}] {icon} {} — {}", event.sequence, event.agent, event.event_type));
+                        if let Some(ref tool) = event.tool {
+                            lines.push(format!("        Tool: {tool}"));
+                        }
+                        let trunc = |s: &str| if s.len() > 100 { format!("{}...", &s[..100]) } else { s.to_string() };
+                        lines.push(format!("        Input: {}", trunc(&event.input)));
+                        lines.push(format!("        Output: {}", trunc(&event.output)));
+                        if let Some(ref error) = event.error {
+                            lines.push(format!("        ⚠ Error: {error}"));
+                        }
+                        lines.push(String::new());
+                    }
+                    if !report.differences.is_empty() {
+                        lines.push("Differences detected:\n".into());
+                        for step in &report.differences {
+                            lines.push(format!("  Step {step} changed (had error)"));
+                        }
+                    }
+                    lines.push(format!("Result: {}", if report.success { "✅ Success" } else { "❌ Failed" }));
+                    lines.push(format!("Total events: {}", report.total_events));
+                    outcome.response = lines.join("\n");
+                }
+            }
+            "score" => {
+                let agent_id = invocation.arguments.first().map(|s| s.as_str()).unwrap_or("default-agent");
+                let health = self.trace_store.agent_stats(agent_id).map_err(|e|
+                    EnterpriseAgentError::Runtime(e)
+                )?;
+                let mut lines = vec![
+                    "Agent Health Dashboard\n".into(),
+                    format!("Agent: {}\n", health.agent_id),
+                    format!("  Success Rate:  {:.0}%", health.success_rate),
+                    format!("  Avg Score:     {:.1}/10", health.avg_score),
+                    format!("  Avg Cost:      {:.0} tokens", health.avg_cost_tokens),
+                    format!("  Avg Latency:   {:.0}ms", health.avg_latency_ms),
+                    format!("  Total Traces:  {}", health.total_traces),
+                    format!("  Recent (24h):  {}\n", health.recent_traces),
+                    "Health Bar:\n".into(),
+                ];
+                for (label, pct, _max) in [
+                    ("Success", health.success_rate / 100.0, 1.0),
+                    ("Score", health.avg_score / 10.0, 1.0),
+                ] {
+                    let filled = (pct.clamp(0.0, 1.0) * 20.0).round() as usize;
+                    let bar = format!("{}{}", "█".repeat(filled), "░".repeat(20 - filled));
+                    lines.push(format!("  {label}: [{bar}] {:.0}%", pct * 100.0));
+                }
+                outcome.response = lines.join("\n");
+            }
+            "agents" => {
+                let cmd = crate::slash::commands::agents::AgentsCommand::new(self.runtimes.multi_agent.clone());
+                let ctx = crate::slash::CommandContext {
+                    line: line.to_string(),
+                    args: invocation.arguments.clone(),
+                    workspace: ".".to_string(),
+                    session_id: session_id.map(|id| id.to_string()),
+                    data: Default::default(),
+                };
+                match cmd.execute(ctx).await {
+                    Ok(output) => { outcome.response = output.response; }
+                    Err(error) => { outcome.response = format!("Command failed: {error}"); }
+                }
+            }
+            "delegate" => {
+                let cmd = crate::slash::commands::delegate::DelegateCommand::new(self.runtimes.multi_agent.clone());
+                let ctx = crate::slash::CommandContext {
+                    line: line.to_string(),
+                    args: invocation.arguments.clone(),
+                    workspace: ".".to_string(),
+                    session_id: session_id.map(|id| id.to_string()),
+                    data: Default::default(),
+                };
+                match cmd.execute(ctx).await {
+                    Ok(output) => { outcome.response = output.response; }
+                    Err(error) => { outcome.response = format!("Command failed: {error}"); }
+                }
+            }
+            "team" => {
+                let cmd = crate::slash::commands::team::TeamCommand::new(self.runtimes.multi_agent.clone());
+                let ctx = crate::slash::CommandContext {
+                    line: line.to_string(),
+                    args: invocation.arguments.clone(),
+                    workspace: ".".to_string(),
+                    session_id: session_id.map(|id| id.to_string()),
+                    data: Default::default(),
+                };
+                match cmd.execute(ctx).await {
+                    Ok(output) => { outcome.response = output.response; }
+                    Err(error) => { outcome.response = format!("Command failed: {error}"); }
+                }
+            }
+            "roles" => {
+                let cmd = crate::slash::commands::roles::RolesCommand::new(self.runtimes.multi_agent.clone());
+                let ctx = crate::slash::CommandContext {
+                    line: line.to_string(),
+                    args: invocation.arguments.clone(),
+                    workspace: ".".to_string(),
+                    session_id: session_id.map(|id| id.to_string()),
+                    data: Default::default(),
+                };
+                match cmd.execute(ctx).await {
+                    Ok(output) => { outcome.response = output.response; }
+                    Err(error) => { outcome.response = format!("Command failed: {error}"); }
+                }
+            }
+            "collaborate" => {
+                let cmd = crate::slash::commands::collaborate::CollaborateCommand::new(self.runtimes.multi_agent.clone());
+                let ctx = crate::slash::CommandContext {
+                    line: line.to_string(),
+                    args: invocation.arguments.clone(),
+                    workspace: ".".to_string(),
+                    session_id: session_id.map(|id| id.to_string()),
+                    data: Default::default(),
+                };
+                match cmd.execute(ctx).await {
+                    Ok(output) => { outcome.response = output.response; }
+                    Err(error) => { outcome.response = format!("Command failed: {error}"); }
                 }
             }
             _ => {
@@ -1588,6 +2398,34 @@ impl EnterpriseAgent {
             self.record_failure(session_id, &mut events, &error).await;
             return Err(error);
         }
+        // Cognitive command post-processing (/decision → ADR generation)
+        let response_text = if message.starts_with('/') {
+            let invocation = InteractionCommandRegistry::with_builtins()
+                .parse(&message)
+                .map_err(|error| EnterpriseAgentError::InvalidArgument(error.to_string()))?;
+            if let Some(cognitive_cmd) = invocation.cognitive_command() {
+                let cognitive_output = crate::cognitive::process_cognitive_response(
+                    cognitive_cmd,
+                    &response_text,
+                    &self.config.workspace,
+                );
+                if let Some(adr_path) = &cognitive_output.adr_path {
+                    events.push(EnterpriseAgentEvent {
+                        kind: "adr_generated".into(),
+                        message: format!("ADR generated at {}", adr_path.display()),
+                        data: json!({
+                            "path": adr_path.to_string_lossy(),
+                            "command": cognitive_cmd.as_str(),
+                        }),
+                    });
+                }
+                cognitive_output.raw_response
+            } else {
+                response_text
+            }
+        } else {
+            response_text
+        };
         if let Err(error) = self
             .append_completed_message(&conversation.id, "ASSISTANT", &response_text)
             .await

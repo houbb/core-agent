@@ -199,6 +199,8 @@ core-agent/
 ├── core-agent-model/      # 模型运行时
 ├── core-agent-plan/       # 规划引擎
 ├── core-agent-memory/     # 记忆持久化
+├── core-agent-multi/      # 多 Agent 运行时（团队/角色/协作）
+├── core-agent-collaboration/ # 协作平台（项目/任务/审查）
 ├── agent-cli/             # Terminal 客户端
 ├── agent-desktop/         # Desktop 客户端（Tauri + Vue 3）
 └── src/                   # EnterpriseAgent 组合入口
@@ -224,6 +226,22 @@ core-agent/
 | `/test` | 测试生成 |
 | `/fix` | 修复问题 |
 | `/undo` / `/redo` | 撤销/重做 |
+
+### 认知命令（Phase 4）
+
+| 命令 | 用法 | 功能 |
+|------|------|------|
+| `/reason` | `/reason [question]` | 问题分析，输出推理摘要与证据 |
+| `/think` | `/think <task>` | 复杂任务分析，评估选项并推荐 |
+| `/hypothesis` | `/hypothesis [topic]` | 假设管理，支持证据与反证 |
+| `/critic` | `/critic [target]` | 自我批判，发现弱点并评分 |
+| `/reflect` | `/reflect [task]` | 反思学习，记录经验教训 |
+| `/decision` | `/decision [topic]` | 决策记录，自动生成 ADR 到 `docs/adr/` |
+| `/agents` | 查看 Agent Society 成员状态 |
+| `/delegate` | 委派任务到 Agent 团队 |
+| `/team` | 团队创建与管理 |
+| `/roles` | 查看角色能力矩阵 |
+| `/collaborate` | 查看协作过程 |
 
 ### 文件上下文
 

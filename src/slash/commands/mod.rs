@@ -1,0 +1,27 @@
+//! 内置 Slash 命令实现
+
+pub mod agents;
+pub mod approve;
+pub mod architecture;
+pub mod benchmark;
+pub mod checkpoint;
+pub mod collaborate;
+pub mod compact;
+pub mod context;
+pub mod debug;
+pub mod delegate;
+pub mod evaluate;
+pub mod knowledge;
+pub mod learn;
+pub mod memory_clear;
+pub mod memory_save;
+pub mod memory_show;
+pub mod permissions;
+pub mod replay;
+pub mod resume;
+pub mod roles;
+pub mod score;
+pub mod search;
+pub mod team;
+pub mod trace;
+pub mod trace_agent;
