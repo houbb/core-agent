@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## [0.35.0] - 2026-07-20
+
+### P035: 内置工具体系 — 44 个插件化工具，博采众长
+
+参考 OpenCode / Claude Code / Codex 三家设计理念，在 `core-agent-tool` 已有 Runtime 基础设施之上实现了完整的**内置工具体系**：
+
+- **44 个内置工具**全部通过 `BuiltinToolProvider` 插件化注册，覆盖 10 个类别：📁 File (11) — read/write/edit/patch/glob/grep/delete/move/copy/info/list；💻 Shell (3) — exec/script/bg；🔧 Git (7) — diff/status/log/commit/branch/checkout/push；🌐 Web (2) — fetch/search；💬 Ask (3) — user/confirm/select；✅ Todo (3) — add/update/list；🤖 Agent (3) — spawn/send/list；📋 Plan (3) — create/update/review；⏰ Cron (3) — create/list/delete；📝 LSP (6) — definition/references/hover/completion/diagnostics/symbols。
+- 每个工具是独立的 `struct` 实现 `Tool` trait，自带 JSON Schema 输入校验、`ToolCapability` 能力路径、`PermissionDecision` 默认权限和超时配置。
+- 新增 `ConfigDrivenPermission` 支持配置覆盖（`core-agent-config.yaml` 中 `tools.overrides`）和通配符能力组匹配（`file.*` → Allow）。
+- 不修改 `ToolManager`/`ToolRegistry`/`ToolCatalog` 等任何现有核心基础设施。
+- 99 个测试全部通过（73 个单元测试 + 16 个 E2E 集成测试 + 10 个已有 Runtime 集成测试），覆盖工具独立执行、ToolManager 完整链路、权限控制、能力匹配和 Tool Schema 有效性。
+
 ## [Unreleased]
 
 ### P034: Enterprise Agent Core, Tools and Extension Loop

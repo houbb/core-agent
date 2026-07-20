@@ -27,6 +27,15 @@ pub struct ToolContext {
     pub cancellation: CancellationToken,
 }
 
+impl Default for ToolContext {
+    fn default() -> Self {
+        Self {
+            request_id: uuid::Uuid::new_v4(),
+            cancellation: CancellationToken::new(),
+        }
+    }
+}
+
 impl ToolContext {
     pub fn is_cancelled(&self) -> bool {
         self.cancellation.is_cancelled()

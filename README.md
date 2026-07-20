@@ -1,5 +1,40 @@
 # core-agent
 
+## v0.35.0：44 个内置工具，插件化注册，配置驱动权限
+
+本版本在 `core-agent-tool` 已有 Runtime 基础设施之上，实现了完整的**内置工具体系**。参考 OpenCode / Claude Code / Codex 三家设计理念，全部工具通过 `BuiltinToolProvider` 插件化注册，不修改任何核心 Runtime 组件。
+
+### 可用工具一览
+
+| 类别 | 工具 | 默认权限 |
+|------|------|---------|
+| 📁 **File (11)** | read, write, edit, patch, glob, grep, delete, move, copy, info, list | read/write/edit 等 Allow，delete/move Ask |
+| 💻 **Shell (3)** | exec, script, bg | exec Ask，script Deny |
+| 🔧 **Git (7)** | diff, status, log, commit, branch, checkout, push | diff/status/log Allow，commit/checkout Ask，push Deny |
+| 🌐 **Web (2)** | fetch, search | Allow |
+| 💬 **Ask (3)** | user, confirm, select | Allow |
+| ✅ **Todo (3)** | add, update, list | Allow |
+| 🤖 **Agent (3)** | spawn, send, list | spawn Ask，send/list Allow |
+| 📋 **Plan (3)** | create, update, review | Allow |
+| ⏰ **Cron (3)** | create, list, delete | create/delete Ask，list Allow |
+| 📝 **LSP (6)** | definition, references, hover, completion, diagnostics, symbols | Allow |
+
+工具权限可通过 `core-agent-config.yaml` 自定义覆盖：
+
+```yaml
+tools:
+  overrides:
+    - tool: "shell.exec"
+      permission: ask
+      timeout_ms: 120000
+    - tool: "git.push"
+      permission: deny
+    - tool: "file.delete"
+      permission: ask
+```
+
+44 个工具每个都带有 JSON Schema 输入校验、`ToolCapability` 能力路径和单元测试。99 个测试全部通过（73 个单元 + 16 个 E2E + 10 个已有集成测试）。
+
 ## v0.3.0：统一模型配置与请求观测
 
 Terminal 与 Desktop 现在读取同一个用户配置文件。设置页可维护多个 OpenAI-compatible 模型，`name` 不区分大小写唯一，并选择一个全局 `activeModel`；每个模型单独配置 `baseURL`、API Key 和最大上下文，默认窗口为 **128K Token**。旧版 `version: 1` 单模型配置仍可读取，第一次从 Desktop 保存时原子迁移为 `version: 2`。

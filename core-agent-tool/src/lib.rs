@@ -5,6 +5,7 @@
 //! dependency on Session, Context or Model Runtime.
 
 pub mod application;
+pub mod builtin;
 pub mod domain;
 pub mod error;
 pub mod infrastructure;
@@ -12,6 +13,7 @@ pub mod persistence;
 pub mod providers;
 
 pub use application::{ToolManager, ToolManagerBuilder};
+pub use builtin::BuiltinToolProvider;
 pub use domain::*;
 pub use error::{ToolError, ToolRuntimeResult};
 pub use infrastructure::*;
