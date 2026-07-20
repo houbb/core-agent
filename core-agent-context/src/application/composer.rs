@@ -7,6 +7,7 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use crate::domain::context::{Context, ContextSegment, TokenDistribution};
+use crate::domain::context_reference::ContextReference;
 use crate::domain::slot::ContextSlot;
 use crate::domain::*;
 use crate::error::ContextResult;
@@ -68,6 +69,7 @@ impl ContextComposer for DefaultComposer {
         let mut plugin = PluginContext::new();
         let mut tool = ToolContext::new();
         let mut user = UserContext::new();
+        let mut references: Vec<ContextReference> = Vec::new();
 
         for seg in &segments {
             add_tokens(&mut total_tokens, seg.token_count)?;
@@ -239,6 +241,13 @@ impl ContextComposer for DefaultComposer {
                         append_json(&mut user.extra, &seg.content);
                     }
                 }
+                ContextSlot::Reference => {
+                    add_tokens(&mut dist.reference, seg.token_count)?;
+                    // 尝试从 content 中反序列化 ContextReference
+                    if let Ok(r) = serde_json::from_value::<ContextReference>(seg.content.clone()) {
+                        references.push(r);
+                    }
+                }
             }
         }
 
@@ -255,6 +264,7 @@ impl ContextComposer for DefaultComposer {
             plugin,
             tool,
             user,
+            references,
             total_tokens,
             token_distribution: dist,
             built_at: now,

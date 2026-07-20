@@ -107,14 +107,16 @@ pub use core_agent_collaboration::{
 };
 pub use core_agent_context as context_runtime;
 pub use core_agent_context::{
-    BuildContextRequest, Context, ContextCache, ContextComposer, ContextError, ContextMessage,
-    ContextObservation, ContextObserver, ContextPipeline, ContextProvider, ContextReducer,
-    ContextResponse, ContextResult, ContextRuntime, ContextSegment, ContextSerializer, ContextSlot,
-    ContextSnapshotMeta, ContextSnapshotResponse, ContextSnapshotStore, ContextSource,
-    ContextStage, DefaultComposer, EnvironmentContext, JsonContextSerializer,
-    ListResponse as ContextListResponse, MemoryContext, PluginContext, ProviderContext,
-    ReducerConfig, SlotConfig, SqliteContextSnapshotStore, SummaryReducer, SystemContext,
-    TokenCounter, TokenDistribution, ToolContext, UserContext, WorkspaceContext,
+    AddReferenceRequest, BuildContextRequest, Context, ContextCache, ContextComposer, ContextError,
+    ContextMessage, ContextObservation, ContextObserver, ContextPackage, ContextPipeline,
+    ContextProvider, ContextReducer, ContextReference, ContextResponse, ContextResult,
+    ContextRuntime, ContextSegment, ContextSerializer, ContextSlot, ContextSnapshotMeta,
+    ContextSnapshotResponse, ContextSnapshotStore, ContextSource, ContextStage, DefaultComposer,
+    EnvironmentContext, JsonContextSerializer, ListResponse as ContextListResponse, MemoryContext,
+    PluginContext, ProviderContext, ReducerConfig, ReferenceLocator, ReferenceResponse,
+    ReferenceSummary, ReferenceType, SlotConfig, SqliteContextReferenceStore,
+    SqliteContextSnapshotStore, SummaryReducer, SystemContext, TokenCounter, TokenDistribution,
+    ToolContext, UserContext, WorkspaceContext,
 };
 pub use core_agent_ecosystem as ecosystem_runtime;
 pub use core_agent_ecosystem::{

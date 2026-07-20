@@ -57,6 +57,8 @@ pub struct ContextResponse {
     pub conversation: ConversationContextSummary,
     pub environment: EnvironmentContextSummary,
     pub user: UserContextSummary,
+    /// 引用摘要
+    pub references: ReferenceSummary,
 }
 
 /// Token 分布响应
@@ -70,6 +72,7 @@ pub struct TokenDistributionResponse {
     pub plugin: u64,
     pub tool: u64,
     pub user: u64,
+    pub reference: u64,
 }
 
 /// 系统上下文摘要
@@ -100,6 +103,52 @@ pub struct EnvironmentContextSummary {
 pub struct UserContextSummary {
     pub has_input: bool,
     pub attachments_count: usize,
+}
+
+/// 引用摘要
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReferenceSummary {
+    pub count: usize,
+    pub file_count: usize,
+    pub selection_count: usize,
+    pub message_count: usize,
+}
+
+// ── Reference DTOs ──
+
+/// 添加引用请求
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddReferenceRequest {
+    /// Session ID
+    pub session_id: String,
+    /// 引用类型
+    pub reference_type: String,
+    /// 定位器 JSON
+    pub locator: serde_json::Value,
+    /// 快照内容（可选）
+    pub snapshot: Option<String>,
+    /// 元数据
+    pub metadata: Option<std::collections::HashMap<String, String>>,
+    /// 文件路径（File 类型）
+    pub path: Option<String>,
+    /// 起始行（File 类型）
+    pub start_line: Option<usize>,
+    /// 结束行（File 类型）
+    pub end_line: Option<usize>,
+    /// 选中内容（Selection 类型）
+    pub content: Option<String>,
+    /// 消息 ID（Message 类型）
+    pub message_id: Option<String>,
+}
+
+/// 引用响应
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReferenceResponse {
+    pub id: String,
+    pub reference_type: String,
+    pub locator: serde_json::Value,
+    pub snapshot: Option<String>,
+    pub created_at: String,
 }
 
 // ── Snapshot DTOs ──
@@ -168,6 +217,12 @@ impl From<&crate::domain::context::Context> for ContextResponse {
                 has_input: ctx.user.current_input.is_some(),
                 attachments_count: ctx.user.attachments.len(),
             },
+            references: ReferenceSummary {
+                count: ctx.references.len(),
+                file_count: ctx.references.iter().filter(|r| matches!(r.reference_type, crate::domain::context_reference::ReferenceType::File)).count(),
+                selection_count: ctx.references.iter().filter(|r| matches!(r.reference_type, crate::domain::context_reference::ReferenceType::Selection)).count(),
+                message_count: ctx.references.iter().filter(|r| matches!(r.reference_type, crate::domain::context_reference::ReferenceType::Message)).count(),
+            },
         }
     }
 }
@@ -208,6 +263,7 @@ mod tests {
             plugin: PluginContext::new(),
             tool: ToolContext::new(),
             user: UserContext::new().with_input("Hello"),
+            references: Vec::new(),
             total_tokens: 100,
             token_distribution: TokenDistribution::default(),
             built_at: Utc::now(),
@@ -282,6 +338,7 @@ impl From<&crate::domain::TokenDistribution> for TokenDistributionResponse {
             plugin: distribution.plugin,
             tool: distribution.tool,
             user: distribution.user,
+            reference: distribution.reference,
         }
     }
 }

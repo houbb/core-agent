@@ -10,11 +10,12 @@ use crate::application::ContextApplicationService;
 use crate::application::ContextPipeline;
 use crate::domain::Context;
 use crate::dto::{
-    BuildContextRequest, ContextAccessSnapshot, ContextResponse, ContextSnapshotResponse,
-    ListResponse,
+    AddReferenceRequest, BuildContextRequest, ContextAccessSnapshot, ContextResponse,
+    ContextSnapshotResponse, ListResponse, ReferenceResponse,
 };
 use crate::error::ContextResult;
 use crate::infrastructure::ContextSnapshotStore;
+use crate::persistence::SqliteContextReferenceStore;
 use core_agent_session::SessionStore;
 
 /// ContextRuntime — Context Runtime 公开 API
@@ -42,6 +43,7 @@ use core_agent_session::SessionStore;
 /// ```
 pub struct ContextRuntime<S: SessionStore> {
     app: ContextApplicationService<S>,
+    reference_store: Option<Arc<SqliteContextReferenceStore>>,
 }
 
 impl<S: SessionStore + 'static> ContextRuntime<S> {
@@ -54,7 +56,7 @@ impl<S: SessionStore + 'static> ContextRuntime<S> {
         snapshot_store: Option<Arc<dyn ContextSnapshotStore>>,
     ) -> Self {
         let app = ContextApplicationService::new(session_store, snapshot_store);
-        Self { app }
+        Self { app, reference_store: None }
     }
 
     /// 使用自定义 Pipeline 创建 Runtime。
@@ -65,23 +67,42 @@ impl<S: SessionStore + 'static> ContextRuntime<S> {
     ) -> Self {
         Self {
             app: ContextApplicationService::with_pipeline(session_store, snapshot_store, pipeline),
+            reference_store: None,
         }
     }
 
-    // ── Context API ──
+    /// 设置 ReferenceStore
+    pub fn with_reference_store(mut self, store: Arc<SqliteContextReferenceStore>) -> Self {
+        self.reference_store = Some(store);
+        self
+    }
 
-    /// 构建 Context
+    /// 构建 Context（带 references 注入）
     ///
     /// 这是 Context Runtime 的核心 API。
     /// 执行完整的 Pipeline：Collect → Reduce → Compose → Snapshot。
     pub async fn build_context(&self, req: BuildContextRequest) -> ContextResult<ContextResponse> {
-        let context = self.app.build_context(req).await?;
+        let context = self.build_with_references(req).await?;
         Ok(ContextResponse::from(&context))
     }
 
     /// 构建并返回完整领域 Context，供 Model Runtime 等框架消费者直接使用。
     pub async fn build(&self, req: BuildContextRequest) -> ContextResult<Context> {
-        self.app.build_context(req).await
+        self.build_with_references(req).await
+    }
+
+    /// 内部：构建 Context，注入 references
+    async fn build_with_references(&self, req: BuildContextRequest) -> ContextResult<Context> {
+        if let Some(ref_store) = &self.reference_store {
+            let app = ContextApplicationService::with_stores(
+                self.app.session_store(),
+                self.app.snapshot_store(),
+                Some(ref_store.clone()),
+            );
+            app.build_context(req).await
+        } else {
+            self.app.build_context(req).await
+        }
     }
 
     // ── Snapshot API ──
@@ -152,6 +173,118 @@ impl<S: SessionStore + 'static> ContextRuntime<S> {
             crate::error::ContextError::InvalidArgument("Invalid session id".into())
         })?;
         self.app.prune_snapshots(&sid, keep_recent).await
+    }
+
+    // ── Reference API ──
+
+    /// 添加引用
+    pub async fn add_reference(&self, req: AddReferenceRequest) -> ContextResult<ReferenceResponse> {
+        let store = self.reference_store.as_ref().ok_or_else(|| {
+            crate::error::ContextError::Internal("No reference store configured".into())
+        })?;
+
+        let reference_type = match req.reference_type.to_uppercase().as_str() {
+            "FILE" => crate::domain::context_reference::ReferenceType::File,
+            "SELECTION" => crate::domain::context_reference::ReferenceType::Selection,
+            "MESSAGE" => crate::domain::context_reference::ReferenceType::Message,
+            _ => return Err(crate::error::ContextError::InvalidArgument(
+                format!("Unknown reference type: {}", req.reference_type)
+            )),
+        };
+
+        let locator = match reference_type {
+            crate::domain::context_reference::ReferenceType::File => {
+                let path = req.path.clone().ok_or_else(|| {
+                    crate::error::ContextError::InvalidArgument("path is required for File reference".into())
+                })?;
+                crate::domain::context_reference::ReferenceLocator::File {
+                    path,
+                    start_line: req.start_line,
+                    end_line: req.end_line,
+                }
+            }
+            crate::domain::context_reference::ReferenceType::Selection => {
+                let content = req.content.clone().ok_or_else(|| {
+                    crate::error::ContextError::InvalidArgument("content is required for Selection reference".into())
+                })?;
+                crate::domain::context_reference::ReferenceLocator::Selection {
+                    content,
+                    source_path: req.path.clone(),
+                    start_line: req.start_line,
+                    end_line: req.end_line,
+                }
+            }
+            crate::domain::context_reference::ReferenceType::Message => {
+                return Err(crate::error::ContextError::InvalidArgument(
+                    "Message references must be created via the application layer".into()
+                ));
+            }
+        };
+
+        let mut metadata = req.metadata.unwrap_or_default();
+        metadata.insert("session_id".to_string(), req.session_id.clone());
+
+        let reference = crate::domain::context_reference::ContextReference {
+            id: uuid::Uuid::new_v4(),
+            reference_type,
+            locator,
+            snapshot: req.snapshot,
+            metadata,
+            created_at: chrono::Utc::now(),
+        };
+
+        store.save_reference(&reference).await?;
+        Ok(ReferenceResponse {
+            id: reference.id.to_string(),
+            reference_type: reference.reference_type.as_str().to_string(),
+            locator: serde_json::to_value(&reference.locator)
+                .map_err(|e| crate::error::ContextError::Serialization(e.to_string()))?,
+            snapshot: reference.snapshot,
+            created_at: reference.created_at.to_rfc3339(),
+        })
+    }
+
+    /// 列出引用
+    pub async fn list_references(
+        &self,
+        session_id: &str,
+        offset: u64,
+        limit: u64,
+    ) -> ContextResult<ListResponse<ReferenceResponse>> {
+        // 使用 reference_store 直接查询
+        let store = self.reference_store.as_ref().ok_or_else(|| {
+            crate::error::ContextError::Internal("No reference store configured".into())
+        })?;
+        let (refs, total) = store.list_references(session_id, offset, limit).await?;
+        Ok(ListResponse {
+            items: refs.iter().map(|r| ReferenceResponse {
+                id: r.id.to_string(),
+                reference_type: r.reference_type.as_str().to_string(),
+                locator: serde_json::to_value(&r.locator)
+                    .unwrap_or(serde_json::Value::Null),
+                snapshot: r.snapshot.clone(),
+                created_at: r.created_at.to_rfc3339(),
+            }).collect(),
+            total,
+            offset,
+            limit,
+        })
+    }
+
+    /// 删除引用
+    pub async fn delete_reference(&self, id: &str) -> ContextResult<()> {
+        let store = self.reference_store.as_ref().ok_or_else(|| {
+            crate::error::ContextError::Internal("No reference store configured".into())
+        })?;
+        store.delete_reference(id).await
+    }
+
+    /// 清理 Session 引用
+    pub async fn clear_references(&self, session_id: &str) -> ContextResult<usize> {
+        let store = self.reference_store.as_ref().ok_or_else(|| {
+            crate::error::ContextError::Internal("No reference store configured".into())
+        })?;
+        store.clear_references(session_id).await
     }
 }
 

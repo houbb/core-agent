@@ -5,6 +5,7 @@
 use async_trait::async_trait;
 
 use crate::domain::context::{ContextSegment, ContextSource};
+use crate::domain::context_reference::ReferenceLocator;
 use crate::domain::slot::{ContextSlot, TokenCounter};
 use crate::error::{ContextError, ContextResult};
 use crate::infrastructure::{ContextProvider, ProviderContext};
@@ -63,7 +64,106 @@ impl ContextProvider for UserProvider {
         )
         .required(); // 用户输入不可裁剪
 
-        Ok(vec![segment])
+        let mut segments = vec![segment];
+        // 添加文件引用和选择引用
+        let ref_segments = collect_reference_segments(ctx)?;
+        segments.extend(ref_segments);
+        Ok(segments)
+    }
+}
+
+/// 从 ProviderContext 的 references 中解析 File 和 Selection 引用，
+/// 生成对应的 ContextSegment。
+fn collect_reference_segments(ctx: &ProviderContext) -> ContextResult<Vec<ContextSegment>> {
+    let mut segments = Vec::new();
+
+    for reference in &ctx.references {
+        match &reference.locator {
+            ReferenceLocator::File { path, start_line, end_line } => {
+                // 尝试读取文件内容
+                let content = read_file_range(ctx, path, *start_line, *end_line)?;
+                let token_count = TokenCounter::estimate(&content);
+                let ref_content = serde_json::json!({
+                    "path": path,
+                    "start_line": start_line,
+                    "end_line": end_line,
+                    "content": content,
+                    "reference_id": reference.id.to_string(),
+                });
+                let segment = ContextSegment::new(
+                    ContextSource::Reference,
+                    ContextSlot::Reference,
+                    ref_content,
+                    token_count,
+                    ContextSlot::Reference.default_priority(),
+                )
+                .required()
+                .with_meta("reference_id", reference.id.to_string())
+                .with_meta("reference_type", "file")
+                .with_meta("path", path.clone());
+                segments.push(segment);
+            }
+            ReferenceLocator::Selection { content, source_path, .. } => {
+                let token_count = TokenCounter::estimate(content);
+                let ref_content = serde_json::json!({
+                    "content": content,
+                    "source_path": source_path,
+                    "reference_id": reference.id.to_string(),
+                });
+                let segment = ContextSegment::new(
+                    ContextSource::Reference,
+                    ContextSlot::Reference,
+                    ref_content,
+                    token_count,
+                    ContextSlot::Reference.default_priority(),
+                )
+                .required()
+                .with_meta("reference_id", reference.id.to_string())
+                .with_meta("reference_type", "selection");
+                segments.push(segment);
+            }
+            _ => {} // Message 类型由 ConversationProvider 处理
+        }
+    }
+
+    Ok(segments)
+}
+
+/// 读取文件指定行范围的内容
+fn read_file_range(ctx: &ProviderContext, path: &str, start_line: Option<usize>, end_line: Option<usize>) -> ContextResult<String> {
+    // 确定文件路径
+    let base_dir = ctx.working_directory.as_deref().unwrap_or(".");
+    let full_path = std::path::Path::new(base_dir).join(path);
+
+    let content = std::fs::read_to_string(&full_path)
+        .map_err(|e| ContextError::InvalidArgument(format!("Cannot read file {}: {}", full_path.display(), e)))?;
+
+    // 如果指定了行范围，只提取指定行
+    match (start_line, end_line) {
+        (Some(start), Some(end)) if start <= end && start > 0 => {
+            let lines: Vec<&str> = content.lines().collect();
+            if start > lines.len() {
+                return Err(ContextError::InvalidArgument(format!(
+                    "Start line {} exceeds file length {} for {}",
+                    start, lines.len(), path
+                )));
+            }
+            let end = end.min(lines.len());
+            let selected = lines[(start - 1)..end].join("\n");
+            Ok(selected)
+        }
+        (Some(start), None) if start > 0 => {
+            let lines: Vec<&str> = content.lines().collect();
+            if start > lines.len() {
+                return Err(ContextError::InvalidArgument(format!(
+                    "Start line {} exceeds file length {} for {}",
+                    start, lines.len(), path
+                )));
+            }
+            let selected = lines[(start - 1)..].join("\n");
+            Ok(selected)
+        }
+        _ => Ok(content), // 没有行范围，返回全部内容
     }
 }
 
@@ -93,6 +193,7 @@ mod tests {
             working_directory: None,
             max_messages: None,
             extensions,
+            references: Vec::new(),
         };
 
         let provider = UserProvider::new();

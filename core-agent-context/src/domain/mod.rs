@@ -4,6 +4,7 @@
 //! Context + ContextSegment + ContextSource + ContextSlot + 8 个子 Context
 
 pub mod context;
+pub mod context_reference;
 pub mod conversation_context;
 pub mod environment_context;
 pub mod memory_context;
@@ -16,6 +17,7 @@ pub mod workspace_context;
 
 // 重导出核心类型
 pub use context::{Context, ContextSegment, ContextSource, TokenDistribution};
+pub use context_reference::{ContextPackage, ContextReference, ReferenceLocator, ReferenceType};
 pub use conversation_context::{ContextMessage, ConversationContext};
 pub use environment_context::EnvironmentContext;
 pub use memory_context::MemoryContext;

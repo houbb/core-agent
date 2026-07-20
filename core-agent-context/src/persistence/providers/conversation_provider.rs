@@ -5,6 +5,7 @@
 use async_trait::async_trait;
 
 use crate::domain::context::{ContextSegment, ContextSource};
+use crate::domain::context_reference::{ReferenceLocator, ReferenceType};
 use crate::domain::slot::{ContextSlot, TokenCounter};
 use crate::error::{ContextError, ContextResult};
 use crate::infrastructure::{ContextProvider, ProviderContext};
@@ -156,6 +157,43 @@ impl ContextProvider for ConversationProvider {
             .with_meta("conversation_total", total.to_string());
 
             segments.push(segment);
+        }
+
+        // 解析消息引用：从 ctx.references 中查找 Message 类型引用并获取对应消息
+        for reference in &ctx.references {
+            if reference.reference_type != ReferenceType::Message {
+                continue;
+            }
+            if let ReferenceLocator::Message { message_id, .. } = &reference.locator {
+                // 从 SessionStore 获取指定消息
+                let msg = ctx
+                    .session_store
+                    .get_message(message_id)
+                    .await
+                    .map_err(ContextError::from)?;
+                if let Some(msg) = msg {
+                    let token_count = TokenCounter::estimate(&msg.content);
+                    let content = serde_json::json!({
+                        "id": msg.id.to_string(),
+                        "role": msg.role.as_str(),
+                        "content": msg.content,
+                        "status": msg.status.as_str(),
+                        "created_at": msg.created_at.to_rfc3339(),
+                    });
+                    let ref_segment = ContextSegment::new(
+                        ContextSource::Reference,
+                        ContextSlot::Reference,
+                        content,
+                        token_count,
+                        ContextSlot::Reference.default_priority(),
+                    )
+                    .required()
+                    .with_meta("message_id", msg.id.to_string())
+                    .with_meta("reference_id", reference.id.to_string())
+                    .with_meta("reference_type", "message");
+                    segments.push(ref_segment);
+                }
+            }
         }
 
         Ok(segments)

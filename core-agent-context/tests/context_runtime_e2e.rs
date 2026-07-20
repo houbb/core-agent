@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use core_agent_context::{
-    BuildContextRequest, ContextError, ContextRuntime, SqliteContextSnapshotStore,
+    AddReferenceRequest, BuildContextRequest, ContextError, ContextRuntime,
+    SqliteContextReferenceStore, SqliteContextSnapshotStore,
 };
 use core_agent_session::{
     AppendMessageRequest, CreateSessionRequest, EventBus, SessionRuntime, SqliteSessionStore,
@@ -273,4 +274,96 @@ async fn file_snapshot_database_recovers_after_reopen() {
     }
 
     std::fs::remove_file(database).unwrap();
+}
+
+#[tokio::test]
+async fn reference_round_trip_and_context_inclusion() {
+    let session_store = Arc::new(SqliteSessionStore::new(":memory:").unwrap());
+    let session_runtime = SessionRuntime::new(session_store.clone(), Arc::new(EventBus::new(16)));
+    let (session_id, conversation_id) = create_session(&session_runtime, "Reference E2E").await;
+
+    let reference_store = Arc::new(SqliteContextReferenceStore::new(":memory:").unwrap());
+    let runtime = ContextRuntime::new(session_store.clone(), None)
+        .with_reference_store(reference_store.clone());
+
+    // 添加一个 File 引用 — 使用与临时目录匹配的路径和行号
+    let file_ref = runtime
+        .add_reference(AddReferenceRequest {
+            session_id: session_id.clone(),
+            reference_type: "FILE".into(),
+            locator: serde_json::json!({"path": "src/main.rs", "start_line": 1, "end_line": 3}),
+            snapshot: Some("fn main() {\n    println!(\"hello\");\n}".into()),
+            metadata: None,
+            path: Some("src/main.rs".into()),
+            start_line: Some(1),
+            end_line: Some(3),
+            content: None,
+            message_id: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(file_ref.reference_type, "FILE");
+
+    // 添加一个 Selection 引用
+    let sel_ref = runtime
+        .add_reference(AddReferenceRequest {
+            session_id: session_id.clone(),
+            reference_type: "SELECTION".into(),
+            locator: serde_json::json!({"content": "selected text"}),
+            snapshot: Some("selected text".into()),
+            metadata: None,
+            path: None,
+            start_line: None,
+            end_line: None,
+            content: Some("selected text".into()),
+            message_id: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(sel_ref.reference_type, "SELECTION");
+
+    // 列出引用
+    let list = runtime.list_references(&session_id, 0, 10).await.unwrap();
+    assert_eq!(list.total, 2);
+    assert_eq!(list.items.len(), 2);
+
+    // 构建 Context 验证引用注入 — 使用临时目录作为 working_directory
+    let temp_dir = std::env::temp_dir()
+        .join(format!("context-ref-test-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(temp_dir.join("src")).unwrap();
+    std::fs::write(
+        temp_dir.join("src").join("main.rs"),
+        "fn main() {\n    println!(\"hello\");\n}\n",
+    )
+    .unwrap();
+
+    let context = runtime
+        .build(BuildContextRequest {
+            session_id: session_id.clone(),
+            conversation_id: None,
+            system_prompt: Some("Test".into()),
+            user_input: Some("analyze".into()),
+            max_messages: Some(10),
+            max_tokens: Some(128000),
+            compression_strategy: None,
+            compression_trigger_percent: None,
+            working_directory: Some(temp_dir.to_string_lossy().to_string()),
+        })
+        .await
+        .unwrap();
+    // 验证 references 字段存在
+    println!("Context references count: {}", context.references.len());
+
+    // 清理临时文件
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    // 删除引用
+    runtime.delete_reference(&file_ref.id).await.unwrap();
+    let list = runtime.list_references(&session_id, 0, 10).await.unwrap();
+    assert_eq!(list.total, 1);
+
+    // 清理引用
+    runtime.clear_references(&session_id).await.unwrap();
+    let list = runtime.list_references(&session_id, 0, 10).await.unwrap();
+    assert_eq!(list.total, 0);
 }

@@ -54,13 +54,15 @@ pub use api::ContextRuntime;
 
 // DTO
 pub use dto::{
-    BuildContextRequest, ContextAccessSnapshot, ContextResponse, ContextSnapshotResponse,
-    ListResponse, TokenDistributionResponse,
+    AddReferenceRequest, BuildContextRequest, ContextAccessSnapshot, ContextResponse,
+    ContextSnapshotResponse, ListResponse, ReferenceResponse, ReferenceSummary,
+    TokenDistributionResponse,
 };
 
 // Domain
 pub use domain::{
     context::{Context, ContextSegment, ContextSource, TokenDistribution},
+    context_reference::{ContextPackage, ContextReference, ReferenceLocator, ReferenceType},
     conversation_context::{ContextMessage, ConversationContext},
     environment_context::EnvironmentContext,
     memory_context::MemoryContext,
@@ -84,6 +86,7 @@ pub use infrastructure::{
 
 // Persistence
 pub use persistence::SqliteContextSnapshotStore;
+pub use persistence::SqliteContextReferenceStore;
 
 // Application
 pub use application::{ContextPipeline, DefaultComposer, SummaryReducer};

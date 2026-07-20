@@ -34,6 +34,8 @@ pub enum ContextSource {
     Tool,
     /// 环境来源
     Environment,
+    /// 引用/注解来源（Context Annotation）
+    Reference,
 }
 
 impl ContextSource {
@@ -48,6 +50,7 @@ impl ContextSource {
             ContextSource::Memory => "MEMORY",
             ContextSource::Tool => "TOOL",
             ContextSource::Environment => "ENVIRONMENT",
+            ContextSource::Reference => "REFERENCE",
         }
     }
 }
@@ -139,6 +142,9 @@ pub struct Context {
     pub tool: super::tool_context::ToolContext,
     /// 用户上下文
     pub user: super::user_context::UserContext,
+    /// 上下文引用（Context Annotation）
+    #[serde(default)]
+    pub references: Vec<super::context_reference::ContextReference>,
     /// 总 Token 数
     pub total_tokens: u64,
     /// 各 Slot 的 Token 分布
@@ -184,6 +190,7 @@ impl Context {
             "plugin": self.plugin,
             "tool": self.tool,
             "user": self.user,
+            "references": self.references,
             "total_tokens": self.total_tokens,
             "token_distribution": self.token_distribution,
         });
@@ -211,6 +218,7 @@ pub struct TokenDistribution {
     pub plugin: u64,
     pub tool: u64,
     pub user: u64,
+    pub reference: u64,
 }
 
 impl TokenDistribution {
@@ -233,6 +241,7 @@ impl TokenDistribution {
             self.plugin,
             self.tool,
             self.user,
+            self.reference,
         ]
         .into_iter()
         .fold(0, u64::saturating_add)

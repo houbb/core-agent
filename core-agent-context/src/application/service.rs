@@ -12,7 +12,8 @@ use crate::application::composer::DefaultComposer;
 use crate::application::pipeline::ContextPipeline;
 use crate::application::reducer::SummaryReducer;
 use crate::domain::context::Context;
-use crate::dto::BuildContextRequest;
+use crate::domain::context_reference::{ContextReference, ReferenceLocator, ReferenceType};
+use crate::dto::{AddReferenceRequest, BuildContextRequest};
 use crate::error::{ContextError, ContextResult};
 use crate::infrastructure::{
     ContextSnapshotMeta, ContextSnapshotStore, ProviderContext, ReducerConfig,
@@ -20,6 +21,7 @@ use crate::infrastructure::{
 use crate::persistence::providers::{
     ConversationProvider, EnvironmentProvider, SystemProvider, UserProvider,
 };
+use crate::persistence::SqliteContextReferenceStore;
 use core_agent_session::SessionStore;
 use core_agent_session::{ConversationType, SessionState};
 
@@ -30,14 +32,34 @@ const DEFAULT_MAX_TOKENS: u64 = 128_000;
 pub struct ContextApplicationService<S: SessionStore> {
     session_store: Arc<S>,
     snapshot_store: Option<Arc<dyn ContextSnapshotStore>>,
+    reference_store: Option<Arc<SqliteContextReferenceStore>>,
     pipeline: ContextPipeline,
 }
 
 impl<S: SessionStore + 'static> ContextApplicationService<S> {
+    /// 获取 SessionStore 引用
+    pub fn session_store(&self) -> Arc<S> {
+        self.session_store.clone()
+    }
+
+    /// 获取 SnapshotStore 引用
+    pub fn snapshot_store(&self) -> Option<Arc<dyn ContextSnapshotStore>> {
+        self.snapshot_store.clone()
+    }
+
     /// 创建服务实例
     pub fn new(
         session_store: Arc<S>,
         snapshot_store: Option<Arc<dyn ContextSnapshotStore>>,
+    ) -> Self {
+        Self::with_stores(session_store, snapshot_store, None)
+    }
+
+    /// 创建服务实例（含 reference_store）
+    pub fn with_stores(
+        session_store: Arc<S>,
+        snapshot_store: Option<Arc<dyn ContextSnapshotStore>>,
+        reference_store: Option<Arc<SqliteContextReferenceStore>>,
     ) -> Self {
         // 构建默认 Pipeline
         let pipeline = ContextPipeline::builder()
@@ -52,6 +74,7 @@ impl<S: SessionStore + 'static> ContextApplicationService<S> {
         Self {
             session_store,
             snapshot_store,
+            reference_store,
             pipeline,
         }
     }
@@ -62,9 +85,20 @@ impl<S: SessionStore + 'static> ContextApplicationService<S> {
         snapshot_store: Option<Arc<dyn ContextSnapshotStore>>,
         pipeline: ContextPipeline,
     ) -> Self {
+        Self::with_pipeline_and_references(session_store, snapshot_store, None, pipeline)
+    }
+
+    /// 使用自定义 Pipeline + ReferenceStore 创建服务实例
+    pub fn with_pipeline_and_references(
+        session_store: Arc<S>,
+        snapshot_store: Option<Arc<dyn ContextSnapshotStore>>,
+        reference_store: Option<Arc<SqliteContextReferenceStore>>,
+        pipeline: ContextPipeline,
+    ) -> Self {
         Self {
             session_store,
             snapshot_store,
+            reference_store,
             pipeline,
         }
     }
@@ -161,6 +195,17 @@ impl<S: SessionStore + 'static> ContextApplicationService<S> {
             );
         }
 
+        // 加载当前 Session 的引用
+        let references = if let Some(ref_store) = &self.reference_store {
+            let session_id_str = session_id.to_string();
+            match ref_store.list_references(&session_id_str, 0, 1000).await {
+                Ok((refs, _)) => refs,
+                Err(_) => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
+
         let provider_ctx = ProviderContext {
             session_id,
             conversation_id: Some(conversation_id),
@@ -176,6 +221,7 @@ impl<S: SessionStore + 'static> ContextApplicationService<S> {
                 max_messages
             }),
             extensions,
+            references,
         };
 
         // 执行 Pipeline
@@ -239,6 +285,111 @@ impl<S: SessionStore + 'static> ContextApplicationService<S> {
             .ok_or_else(|| ContextError::Internal("No snapshot store configured".into()))?;
 
         store.prune_snapshots(session_id, keep_recent).await
+    }
+
+    // ── Reference 用例 ──
+
+    /// 添加引用
+    pub async fn add_reference(&self, req: AddReferenceRequest) -> ContextResult<ContextReference> {
+        let store = self
+            .reference_store
+            .as_ref()
+            .ok_or_else(|| ContextError::Internal("No reference store configured".into()))?;
+
+        let reference_type = match req.reference_type.to_uppercase().as_str() {
+            "FILE" => ReferenceType::File,
+            "SELECTION" => ReferenceType::Selection,
+            "MESSAGE" => ReferenceType::Message,
+            _ => return Err(ContextError::InvalidArgument(format!("Unknown reference type: {}", req.reference_type))),
+        };
+
+        let locator = match reference_type {
+            ReferenceType::File => {
+                let path = req.path.clone().ok_or_else(|| {
+                    ContextError::InvalidArgument("path is required for File reference".into())
+                })?;
+                ReferenceLocator::File {
+                    path,
+                    start_line: req.start_line,
+                    end_line: req.end_line,
+                }
+            }
+            ReferenceType::Selection => {
+                let content = req.content.clone().ok_or_else(|| {
+                    ContextError::InvalidArgument("content is required for Selection reference".into())
+                })?;
+                ReferenceLocator::Selection {
+                    content,
+                    source_path: req.path.clone(),
+                    start_line: req.start_line,
+                    end_line: req.end_line,
+                }
+            }
+            ReferenceType::Message => {
+                let message_id = req.message_id.clone().ok_or_else(|| {
+                    ContextError::InvalidArgument("message_id is required for Message reference".into())
+                })?;
+                let mid = Uuid::parse_str(&message_id)
+                    .map_err(|_| ContextError::InvalidArgument("Invalid message_id".into()))?;
+                let sid = Uuid::parse_str(&req.session_id)
+                    .map_err(|_| ContextError::InvalidArgument("Invalid session_id".into()))?;
+                // Need conversation_id - fetch from the message
+                let msg = self.session_store.get_message(&mid).await?
+                    .ok_or_else(|| ContextError::NotFound(format!("Message {}", message_id)))?;
+                ReferenceLocator::Message {
+                    session_id: sid,
+                    conversation_id: msg.conversation_id,
+                    message_id: mid,
+                }
+            }
+        };
+
+        let mut metadata = req.metadata.unwrap_or_default();
+        metadata.insert("session_id".to_string(), req.session_id.clone());
+
+        let reference = ContextReference {
+            id: uuid::Uuid::new_v4(),
+            reference_type,
+            locator,
+            snapshot: req.snapshot,
+            metadata,
+            created_at: chrono::Utc::now(),
+        };
+
+        store.save_reference(&reference).await?;
+        Ok(reference)
+    }
+
+    /// 列出引用
+    pub async fn list_references(
+        &self,
+        session_id: &str,
+        offset: u64,
+        limit: u64,
+    ) -> ContextResult<(Vec<ContextReference>, u64)> {
+        let store = self
+            .reference_store
+            .as_ref()
+            .ok_or_else(|| ContextError::Internal("No reference store configured".into()))?;
+        store.list_references(session_id, offset, limit).await
+    }
+
+    /// 删除引用
+    pub async fn delete_reference(&self, id: &str) -> ContextResult<()> {
+        let store = self
+            .reference_store
+            .as_ref()
+            .ok_or_else(|| ContextError::Internal("No reference store configured".into()))?;
+        store.delete_reference(id).await
+    }
+
+    /// 清理某 Session 的所有引用
+    pub async fn clear_references(&self, session_id: &str) -> ContextResult<usize> {
+        let store = self
+            .reference_store
+            .as_ref()
+            .ok_or_else(|| ContextError::Internal("No reference store configured".into()))?;
+        store.clear_references(session_id).await
     }
 }
 

@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::domain::context::{ContextSegment, ContextSource};
+use crate::domain::context_reference::ContextReference;
 use crate::domain::slot::ContextSlot;
 use crate::error::ContextResult;
 use core_agent_session::SessionStore;
@@ -32,6 +33,8 @@ pub struct ProviderContext {
     pub max_messages: Option<usize>,
     /// 扩展参数
     pub extensions: HashMap<String, serde_json::Value>,
+    /// 上下文引用（Context Annotation）
+    pub references: Vec<ContextReference>,
 }
 
 impl ProviderContext {
@@ -45,6 +48,7 @@ impl ProviderContext {
             working_directory: None,
             max_messages: None,
             extensions: HashMap::new(),
+            references: Vec::new(),
         }
     }
 
@@ -57,6 +61,12 @@ impl ProviderContext {
     /// 设置系统提示
     pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
         self.system_prompt = Some(prompt.into());
+        self
+    }
+
+    /// 设置上下文引用
+    pub fn with_references(mut self, references: Vec<ContextReference>) -> Self {
+        self.references = references;
         self
     }
 }

@@ -314,6 +314,22 @@ impl InteractionCommandRegistry {
                 0,
                 InteractionCommandRoute::Runtime,
             ),
+            (
+                "comment",
+                "Add a context annotation (file, selection, or message reference)",
+                "/comment <path> [start_line] [end_line]",
+                1,
+                3,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "context",
+                "List, remove, or clear context annotations",
+                "/context <list|remove|clear> [id]",
+                0,
+                2,
+                InteractionCommandRoute::Runtime,
+            ),
         ] {
             registry
                 .register(InteractionCommandDefinition {

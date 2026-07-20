@@ -27,11 +27,13 @@ pub enum ContextSlot {
     Plugin,
     /// 用户输入槽位
     User,
+    /// 引用/注解槽位（Context Annotation）
+    Reference,
 }
 
 impl ContextSlot {
     /// Composer 与 Reducer 使用的稳定 Slot 顺序。
-    pub const ORDERED: [ContextSlot; 8] = [
+    pub const ORDERED: [ContextSlot; 9] = [
         ContextSlot::System,
         ContextSlot::Environment,
         ContextSlot::Workspace,
@@ -40,6 +42,7 @@ impl ContextSlot {
         ContextSlot::Tool,
         ContextSlot::Plugin,
         ContextSlot::User,
+        ContextSlot::Reference,
     ];
 
     /// 获取 Slot 名称（大写）
@@ -53,6 +56,7 @@ impl ContextSlot {
             ContextSlot::Tool => "TOOL",
             ContextSlot::Plugin => "PLUGIN",
             ContextSlot::User => "USER",
+            ContextSlot::Reference => "REFERENCE",
         }
     }
 
@@ -69,6 +73,7 @@ impl ContextSlot {
             ContextSlot::Tool => 50,
             ContextSlot::Plugin => 40,
             ContextSlot::User => 30,
+            ContextSlot::Reference => 25,
         }
     }
 }

@@ -130,4 +130,4 @@ For substantial features, architecture changes, ambiguous product work, migratio
 
 README.md 也进行同步的更新，保持文档最新
 
-要面向用户去写，保留启动方式（方便快速体验）。
+要面向用户去写，内容足够精美+保留启动方式（方便快速体验）。
