@@ -42,29 +42,28 @@ impl ContextProvider for UserProvider {
     }
 
     async fn collect(&self, ctx: &ProviderContext) -> ContextResult<Vec<ContextSegment>> {
-        // 从 extensions 中读取 user_input
-        let user_input = match ctx.extensions.get("user_input") {
-            Some(val) => val.as_str().ok_or_else(|| {
-                ContextError::InvalidArgument("user_input extension must be a string".into())
-            })?,
-            None => return Ok(Vec::new()),
-        };
+        let mut segments = Vec::new();
 
-        if user_input.is_empty() {
-            return Ok(Vec::new());
+        // 从 extensions 中读取 user_input
+        if let Some(val) = ctx.extensions.get("user_input") {
+            let user_input = val.as_str().ok_or_else(|| {
+                ContextError::InvalidArgument("user_input extension must be a string".into())
+            })?;
+
+            if !user_input.is_empty() {
+                let token_count = TokenCounter::estimate(user_input);
+                let segment = ContextSegment::new(
+                    ContextSource::User,
+                    ContextSlot::User,
+                    serde_json::Value::String(user_input.to_owned()),
+                    token_count,
+                    ContextSlot::User.default_priority(),
+                )
+                .required(); // 用户输入不可裁剪
+                segments.push(segment);
+            }
         }
 
-        let token_count = TokenCounter::estimate(user_input);
-        let segment = ContextSegment::new(
-            ContextSource::User,
-            ContextSlot::User,
-            serde_json::Value::String(user_input.to_owned()),
-            token_count,
-            ContextSlot::User.default_priority(),
-        )
-        .required(); // 用户输入不可裁剪
-
-        let mut segments = vec![segment];
         // 添加文件引用和选择引用
         let ref_segments = collect_reference_segments(ctx)?;
         segments.extend(ref_segments);
