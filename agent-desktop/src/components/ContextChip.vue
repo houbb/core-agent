@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { X, FileCode, MessageSquare, Code } from "lucide-vue-next";
+import { X, FileCode, MessageSquare, Code, BarChart3 } from "lucide-vue-next";
 import type { ContextReference } from "../types";
 
-defineProps<{
+const props = defineProps<{
   references: ContextReference[];
+  totalTokens?: number;
 }>();
 const emit = defineEmits<{
   remove: [id: string];
@@ -22,6 +23,14 @@ function refIcon(type: string) {
       return FileCode;
   }
 }
+
+function formatTokens(tokens: number) {
+  return tokens >= 1_000_000
+    ? `${(tokens / 1_000_000).toFixed(1)}M`
+    : tokens >= 1_000
+      ? `${(tokens / 1_000).toFixed(1)}K`
+      : `${tokens}`;
+}
 </script>
 
 <template>
@@ -30,6 +39,7 @@ function refIcon(type: string) {
       v-for="ref in references"
       :key="ref.id"
       class="context-chip"
+      :class="`chip-${ref.referenceType.toLowerCase()}`"
       @click="emit('open', ref)"
     >
       <component :is="refIcon(ref.referenceType)" :size="12" />
@@ -44,6 +54,10 @@ function refIcon(type: string) {
       >
         <X :size="12" />
       </button>
+    </div>
+    <div v-if="totalTokens !== undefined" class="chip-token-count" title="Estimated context tokens">
+      <BarChart3 :size="11" />
+      <span>{{ formatTokens(totalTokens) }}</span>
     </div>
   </div>
 </template>

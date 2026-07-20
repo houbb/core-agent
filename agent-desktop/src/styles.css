@@ -110,6 +110,18 @@ h3 { font-size: 15px; font-weight: 680; }
 .message-content .file-link { color: var(--accent-bright); text-decoration: underline; text-decoration-color: rgba(226, 181, 75, 0.3); text-underline-offset: 2px; cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 2px; }
 .message-content .file-link:hover { color: var(--accent); text-decoration-color: var(--accent); }
 .message-content .file-link svg { flex-shrink: 0; }
+.message-actions { display: flex; align-items: center; gap: 4px; }
+.message-actions button { display: inline-flex; align-items: center; gap: 4px; padding: 2px 5px; border: 0; border-radius: 6px; background: transparent; color: var(--text-tertiary); font-size: 9px; cursor: pointer; }
+.message-actions button:hover { background: var(--bg-secondary); color: var(--text); }
+
+.selection-menu { position: fixed; z-index: 100; display: grid; padding: 4px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface-raised); box-shadow: 0 8px 24px rgba(0,0,0,0.35); transform: translate(-50%, -100%); animation: selection-fade-in 0.15s ease-out; }
+.selection-menu button { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--text); font-size: 11px; cursor: pointer; white-space: nowrap; }
+.selection-menu button:hover { background: var(--accent-bg); color: var(--accent-bright); }
+
+@keyframes selection-fade-in {
+  from { opacity: 0; transform: translate(-50%, -90%); }
+  to { opacity: 1; transform: translate(-50%, -100%); }
+}
 .prompt-box { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin: 8px; padding: 8px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface-raised); }
 .prompt-box textarea { resize: none; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 12px; line-height: 1.45; }
 .send-button { align-self: end; min-height: 32px; min-width: 32px; padding: 6px; border-radius: 9px; }
@@ -451,12 +463,35 @@ input { border: 1px solid var(--border); border-radius: 8px; background: var(--b
 .selected-context { display: flex; align-items: center; gap: 5px; margin: 8px; padding: 8px 9px; overflow: hidden; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--accent-bg); color: var(--accent-bright); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 
 .context-chip-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 8px; }
-.context-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--accent-bg); color: var(--accent-bright); font-size: 10px; cursor: pointer; white-space: nowrap; }
+.context-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--accent-bg); color: var(--accent-bright); font-size: 10px; cursor: pointer; white-space: nowrap; animation: chip-slide-in 0.2s ease-out; }
 .context-chip:hover { border-color: var(--accent); }
+.context-chip.chip-file { border-color: rgba(103, 160, 201, 0.35); background: rgba(103, 160, 201, 0.08); color: #9fc9e7; }
+.context-chip.chip-selection { border-color: rgba(201, 103, 160, 0.35); background: rgba(201, 103, 160, 0.08); color: #e7a0c9; }
+.context-chip.chip-message { border-color: rgba(103, 201, 140, 0.35); background: rgba(103, 201, 140, 0.08); color: #a0e7c0; }
 .chip-label { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip-line { color: var(--text-tertiary); font-size: 9px; }
 .chip-remove { display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--text-tertiary); cursor: pointer; }
 .chip-remove:hover { color: var(--danger); }
+.chip-token-count { display: inline-flex; align-items: center; gap: 3px; margin-inline-start: auto; padding: 4px 8px; border-radius: 10px; background: var(--bg-secondary); color: var(--text-tertiary); font-size: 9px; white-space: nowrap; }
+
+@keyframes chip-slide-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.95); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.code-block-wrapper { margin-block: 8px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.code-block-source { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-block-end: 1px solid var(--border); background: var(--bg-secondary); color: var(--text-tertiary); font-size: 10px; }
+.code-block { overflow-x: auto; padding: 12px; background: var(--bg-tertiary); font-size: 11px; line-height: 1.5; }
+.code-block code { font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace; white-space: pre; }
+.chip-file { border-color: rgba(103, 160, 201, 0.35); background: rgba(103, 160, 201, 0.08); }
+.chip-selection { border-color: rgba(201, 103, 160, 0.35); background: rgba(201, 103, 160, 0.08); }
+.chip-message { border-color: rgba(103, 201, 140, 0.35); background: rgba(103, 201, 140, 0.08); }
+.chip-token-count { display: inline-flex; align-items: center; gap: 3px; margin-inline-start: auto; padding: 4px 8px; border-radius: 10px; background: var(--bg-secondary); color: var(--text-tertiary); font-size: 9px; white-space: nowrap; }
+
+.code-block-wrapper { margin-block: 8px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.code-block-source { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-block-end: 1px solid var(--border); background: var(--bg-secondary); color: var(--text-tertiary); font-size: 10px; }
+.code-block { overflow-x: auto; padding: 12px; background: var(--bg-tertiary); font-size: 11px; line-height: 1.5; }
+.code-block code { font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace; white-space: pre; }
 
 .workspace-shell { min-height: 0; height: 100vh; }
 .compact-topbar { grid-template-columns: minmax(0, 1fr) auto; min-height: 60px; padding: 10px 16px; }

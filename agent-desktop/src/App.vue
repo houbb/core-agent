@@ -7,6 +7,7 @@ import {
   FolderOpen,
   Gauge,
   Globe2,
+  MessageSquare,
   Moon,
   Plus,
   RefreshCw,
@@ -47,6 +48,15 @@ const completionHint = ref("");
 const selectedCompletion = ref(0);
 const selectedPath = ref("");
 const copiedMessageId = ref("");
+const selectionMenu = ref<{
+  visible: boolean;
+  text: string;
+  x: number;
+  y: number;
+  sourcePath?: string;
+  startLine?: number;
+  endLine?: number;
+}>({ visible: false, text: "", x: 0, y: 0 });
 const openingWorkspace = ref(false);
 const savingSettings = ref(false);
 const pendingApproval = ref<ApprovalRequest>();
@@ -169,6 +179,7 @@ const chartUsage = computed(() => {
 
 onMounted(async () => {
   closeApprovals = await api.subscribeApprovals((request) => (pendingApproval.value = request));
+  document.addEventListener("selectionchange", handleSelectionChange);
   await controller.load();
 });
 
@@ -280,6 +291,47 @@ async function copyMessage(id: string, content: string) {
   setTimeout(() => (copiedMessageId.value = ""), 1_500);
 }
 
+function handleSelectionChange() {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || !selection.toString().trim()) {
+    selectionMenu.value.visible = false;
+    return;
+  }
+  const text = selection.toString().trim();
+  if (text.length > 500) {
+    selectionMenu.value.visible = false;
+    return;
+  }
+  const range = selection.getRangeAt(0);
+  const rect = range.getBoundingClientRect();
+  selectionMenu.value = {
+    visible: true,
+    text,
+    x: rect.left + rect.width / 2,
+    y: rect.top - 10,
+    sourcePath: undefined,
+    startLine: undefined,
+    endLine: undefined,
+  };
+}
+
+function addSelectionReference() {
+  if (!selectionMenu.value.text) return;
+  controller.addReference({
+    referenceType: "SELECTION",
+    content: selectionMenu.value.text,
+    path: selectionMenu.value.sourcePath,
+    startLine: selectionMenu.value.startLine,
+    endLine: selectionMenu.value.endLine,
+  });
+  selectionMenu.value.visible = false;
+  window.getSelection()?.removeAllRanges();
+}
+
+function quoteMessage(messageId: string) {
+  insertPrompt(`@message:${messageId} `);
+}
+
 async function decideApproval(decision: "ALLOW_ONCE" | "DENY") {
   if (!pendingApproval.value || decidingApproval.value) return;
   decidingApproval.value = true;
@@ -338,14 +390,49 @@ function formatDuration(milliseconds?: number) {
 }
 
 interface ContentSegment {
-  type: "text" | "file-link";
+  type: "text" | "file-link" | "code-block";
   text: string;
   path?: string;
   line?: number;
   display?: string;
+  code?: string;
+  language?: string;
+  sourcePath?: string;
 }
 
 function parseContentSegments(text: string): ContentSegment[] {
+  const segments: ContentSegment[] = [];
+  // Match code blocks first: ```lang:path ... ```
+  const codeBlockRe = /```(\w+)?(?::([\w./\\-]+))?\n([\s\S]*?)```/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = codeBlockRe.exec(text)) !== null) {
+    // Emit any text before this code block
+    if (match.index > lastIndex) {
+      const before = text.slice(lastIndex, match.index);
+      segments.push(...parseFileLinks(before));
+    }
+    const language = match[1] || "";
+    const sourcePath = match[2] || "";
+    const code = match[3];
+    segments.push({
+      type: "code-block",
+      text: match[0],
+      code,
+      language,
+      sourcePath,
+      display: sourcePath || "",
+    });
+    lastIndex = match.index + match[0].length;
+  }
+  // Emit remaining text
+  if (lastIndex < text.length) {
+    segments.push(...parseFileLinks(text.slice(lastIndex)));
+  }
+  return segments.length ? segments : [{ type: "text", text }];
+}
+
+function parseFileLinks(text: string): ContentSegment[] {
   const segments: ContentSegment[] = [];
   const filePathRe = /((?:@?[\w./-]+\.[a-z]+)(?::(\d+)(?:-\d+)?)?)/gi;
   let lastIndex = 0;
@@ -370,7 +457,7 @@ function parseContentSegments(text: string): ContentSegment[] {
   if (lastIndex < text.length) {
     segments.push({ type: "text", text: text.slice(lastIndex) });
   }
-  return segments.length ? segments : [{ type: "text", text }];
+  return segments;
 }
 
 function openFileFromSegment(segment: ContentSegment) {
@@ -431,21 +518,44 @@ function localDay(date: Date) {
         <div class="conversation">
           <div v-if="!controller.state.conversation.length" class="welcome-copy"><span class="brand-orb">A</span><h2>{{ t.welcome }}</h2><p>{{ t.welcomeDetail }}</p></div>
           <article v-for="item in controller.state.conversation" :key="item.id" class="message" :class="item.role">
-            <header class="message-header"><span>{{ item.role }}</span><button :aria-label="`Copy ${item.role} message`" @click="copyMessage(item.id, item.content)"><Copy :size="12" />{{ copiedMessageId === item.id ? "Copied" : "Copy" }}</button></header>
+            <header class="message-header"><span>{{ item.role }}</span><span class="message-actions">
+              <button v-if="item.role === 'agent' || item.role === 'user'" :aria-label="`Quote ${item.role} message`" title="Reference this message in context" @click="quoteMessage(item.id)"><MessageSquare :size="12" /> Quote</button>
+              <button :aria-label="`Copy ${item.role} message`" @click="copyMessage(item.id, item.content)"><Copy :size="12" />{{ copiedMessageId === item.id ? "Copied" : "Copy" }}</button>
+            </span></header>
             <div class="message-content">
               <template v-for="(segment, i) in parseContentSegments(item.content)" :key="i">
                 <span v-if="segment.type === 'text'">{{ segment.text }}</span>
-                <a v-else class="file-link" href="#" @click.prevent="openFileFromSegment(segment)">
+                <a v-else-if="segment.type === 'file-link'" class="file-link" href="#" @click.prevent="openFileFromSegment(segment)">
                   <FileCode :size="12" />{{ segment.display }}
                 </a>
+                <div v-else-if="segment.type === 'code-block'" class="code-block-wrapper">
+                  <div v-if="segment.sourcePath" class="code-block-source">
+                    <FileCode :size="11" />
+                    <a href="#" class="file-link" @click.prevent="controller.openFile(segment.sourcePath!)">{{ segment.sourcePath }}</a>
+                  </div>
+                  <pre class="code-block"><code>{{ segment.code }}</code></pre>
+                </div>
               </template>
             </div>
           </article>
         </div>
 
+        <!-- Selection context menu -->
+        <div
+          v-if="selectionMenu.visible"
+          class="selection-menu"
+          :style="{ left: `${selectionMenu.x}px`, top: `${selectionMenu.y}px` }"
+          @click.stop
+        >
+          <button @click="addSelectionReference">
+            <Code :size="12" /> Add to context
+          </button>
+        </div>
+
         <form class="prompt-box chat-prompt" @submit.prevent="send">
           <ContextChip
             :references="controller.state.contextReferences"
+            :total-tokens="controller.state.snapshot.contextUsage?.totalTokens"
             @remove="(id: string) => controller.state.contextReferences = controller.state.contextReferences.filter(r => r.id !== id)"
             @open="(ref) => openFileFromSegment({ type: 'file-link', text: ref.locator.path || '', path: ref.locator.path, line: ref.locator.startLine, display: ref.locator.path })"
           />

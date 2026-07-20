@@ -290,6 +290,19 @@ pub struct RuntimeRequest {
     pub body: Option<Value>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddReferenceRequest {
+    pub session_id: String,
+    pub reference_type: String,
+    pub path: Option<String>,
+    pub start_line: Option<usize>,
+    pub end_line: Option<usize>,
+    pub content: Option<String>,
+    pub message_id: Option<String>,
+    pub snapshot: Option<String>,
+}
+
 fn validate_key(label: &str, value: &str) -> DesktopResult<()> {
     if value.is_empty()
         || value.len() > 128

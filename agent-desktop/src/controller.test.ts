@@ -40,6 +40,12 @@ class FakeApi implements DesktopApi {
   ]);
   openWorkspace = vi.fn(async () => undefined);
   openFile = vi.fn(async () => undefined);
+  addReference = vi.fn(async () => ({
+    id: "ref-1",
+    referenceType: "FILE" as const,
+    locator: { path: "src/main.rs" },
+    createdAt: new Date().toISOString(),
+  }));
   searchContext = vi.fn(async (query: string) => ({
     indexedFiles: 1,
     indexedDirectories: 0,

@@ -208,6 +208,27 @@ export function createDesktopController(api: DesktopApi) {
     }
   }
 
+  async function addReference(request: {
+    referenceType: string;
+    path?: string;
+    startLine?: number;
+    endLine?: number;
+    content?: string;
+    messageId?: string;
+  }) {
+    if (!state.currentSessionId) return;
+    try {
+      const ref = await api.addReference({
+        sessionId: state.currentSessionId,
+        ...request,
+      });
+      state.contextReferences.push(ref);
+      return ref;
+    } catch (error) {
+      state.error = error instanceof Error ? error.message : "Unable to add reference";
+    }
+  }
+
   async function newSession() {
     await send("/new");
   }
@@ -316,6 +337,7 @@ export function createDesktopController(api: DesktopApi) {
     load,
     openWorkspace,
     openFile,
+    addReference,
     selectSession,
     newSession,
     send,

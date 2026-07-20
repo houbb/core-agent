@@ -28,6 +28,16 @@ export interface DesktopApi {
   searchContext(query: string, limit?: number): Promise<ContextCandidateSearch>;
   sendMessage(message: string, sessionId?: string): Promise<AgentSubmission>;
   openFile(path: string, line?: number): Promise<void>;
+  addReference(request: {
+    sessionId: string;
+    referenceType: string;
+    path?: string;
+    startLine?: number;
+    endLine?: number;
+    content?: string;
+    messageId?: string;
+    snapshot?: string;
+  }): Promise<ContextReference>;
   loadSession?(sessionId: string): Promise<ConversationItem[]>;
   loadSettings?(): Promise<SettingsSnapshot>;
   saveSettings?(request: {
@@ -120,6 +130,43 @@ export class TauriDesktopApi implements DesktopApi {
     return invoke<void>("agent_open_file", { path, line });
   }
 
+  async addReference(request: {
+    sessionId: string;
+    referenceType: string;
+    path?: string;
+    startLine?: number;
+    endLine?: number;
+    content?: string;
+    messageId?: string;
+    snapshot?: string;
+  }): Promise<ContextReference> {
+    const result = await invoke<{ id: string; referenceType: string; locator: unknown; snapshot?: string; createdAt: string }>("agent_add_reference", {
+      request: {
+        sessionId: request.sessionId,
+        referenceType: request.referenceType,
+        path: request.path,
+        startLine: request.startLine,
+        endLine: request.endLine,
+        content: request.content,
+        messageId: request.messageId,
+        snapshot: request.snapshot,
+      },
+    });
+    const loc = result.locator as Record<string, unknown>;
+    return {
+      id: result.id,
+      referenceType: result.referenceType as "FILE" | "SELECTION" | "MESSAGE",
+      locator: {
+        path: (loc?.File as Record<string, unknown>)?.["path"] as string | undefined,
+        startLine: (loc?.File as Record<string, unknown>)?.["startLine"] as number | undefined,
+        endLine: (loc?.File as Record<string, unknown>)?.["endLine"] as number | undefined,
+        content: (loc?.Selection as Record<string, unknown>)?.["content"] as string | undefined,
+      },
+      snapshot: result.snapshot,
+      createdAt: result.createdAt,
+    };
+  }
+
   async subscribeApprovals(onRequest: (request: ApprovalRequest) => void): Promise<() => void> {
     return listen<ApprovalRequest>("agent-approval-required", (event) => onRequest(event.payload));
   }
@@ -181,6 +228,19 @@ export class HttpDesktopApi implements DesktopApi {
 
   async openFile(path: string, line?: number): Promise<void> {
     throw new Error("Opening files is only available in the embedded desktop runtime.");
+  }
+
+  async addReference(_request: {
+    sessionId: string;
+    referenceType: string;
+    path?: string;
+    startLine?: number;
+    endLine?: number;
+    content?: string;
+    messageId?: string;
+    snapshot?: string;
+  }): Promise<ContextReference> {
+    throw new Error("Adding references is only available in the embedded desktop runtime.");
   }
 
   async sendMessage(message: string, sessionId?: string): Promise<AgentSubmission> {

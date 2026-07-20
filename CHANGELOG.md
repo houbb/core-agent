@@ -18,12 +18,38 @@
 - **`ContextReference` 类型** — 前端类型定义，覆盖 FILE/SELECTION/MESSAGE 三种引用
 - **集成到 App.vue** — 输入框区域引入 Context Chip，支持删除和打开引用
 
+#### 🟡 选中代码引用 UI (P1)
+
+- **选中代码浮动菜单** — `App.vue` 监听 `selectionchange` 事件，选中代码后弹出浮动菜单，点击 "Add to context" 调用后端 `add_reference` 持久化
+- **`agent_add_reference` Tauri 命令** — 新增 Tauri 命令，桥接 `ContextRuntime::add_reference` API
+- **`AddReferenceRequest` 类型** — `domain.rs` 新增 DTO 类型，支持 FILE/SELECTION 两种引用
+
+#### 🟡 历史消息引用 UI (P1)
+
+- **消息 Quote 按钮** — 每条消息 header 新增 Quote 按钮，点击插入 `@message:id` 引用到输入框
+- **`@message:id` 引用格式** — 复用已有的 `@` 补全体系，消息引用作为上下文提交
+
+#### 🟢 代码块来源标注 (P2)
+
+- **Desktop 代码块解析** — `parseContentSegments` 新增 ````lang:path 格式解析，代码块上方显示来源文件路径，`FileCode` 图标 + 可点击跳转
+- **CLI 代码块高亮** — `parse_file_paths` 检测 ```` 标记，以 GOLD 颜色高亮语言和文件路径
+
+#### 🟢 引用样式优化 (P2)
+
+- **Context Chip 分色** — FILE=蓝色、SELECTION=粉色、MESSAGE=绿色，按引用类型自动区分
+- **入场动画** — `chip-slide-in`（Chip 滑入缩放）和 `selection-fade-in`（浮动菜单淡入）动画效果
+
+#### 🟢 引用 Token 统计 (P2)
+
+- **Context Chip 消耗显示** — `ContextChip.vue` 新增 `totalTokens` prop，显示 `📊 12.5K` 格式的上下文消耗估计值
+- **集成到 App.vue** — 从 `contextUsage.totalTokens` 取值传入 Context Chip
+
 #### 🛠 架构变更
 
-- **Desktop API** — `DesktopApi` 接口新增 `openFile(path, line?)` 方法，`TauriDesktopApi` 和 `HttpDesktopApi` 分别实现（Http 端抛出友好提示）
-- **Controller** — `controller.ts` 新增 `openFile` 方法和 `contextReferences` 状态
+- **Desktop API** — `DesktopApi` 接口新增 `openFile(path, line?)` 和 `addReference()` 方法，`TauriDesktopApi` 和 `HttpDesktopApi` 分别实现
+- **Controller** — `controller.ts` 新增 `openFile`、`addReference` 方法和 `contextReferences` 状态
 - **CLI 依赖** — `agent-cli/Cargo.toml` 新增 `regex` 依赖
-- **测试更新** — `controller.test.ts` 的 `FakeApi` 新增 `openFile` 桩方法
+- **测试更新** — `controller.test.ts` 的 `FakeApi` 新增 `openFile`、`addReference` 桩方法
 
 #### 🔬 验证
 

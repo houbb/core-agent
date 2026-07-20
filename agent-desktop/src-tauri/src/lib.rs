@@ -17,11 +17,11 @@ use core_agent::{
 use tauri::{Emitter, Manager};
 
 pub use domain::{
-    AgentMessageRequest, AgentSubmission, ApprovalDecisionRequest, ChangeItem, CommandSuggestion,
-    ContextUsage, ConversationMessage, DesktopWorkspaceSnapshot, MemoryItem, ModelSetting,
-    PermissionModeRequest, PreferenceKind, ProjectNode, RuntimeRequest, SavePreferenceRequest,
-    SaveSettingsRequest, SessionItem, SettingsSnapshot, ToolStatus, TraceStep, UiPreference,
-    UsageSnapshot,
+    AddReferenceRequest, AgentMessageRequest, AgentSubmission, ApprovalDecisionRequest, ChangeItem,
+    CommandSuggestion, ContextUsage, ConversationMessage, DesktopWorkspaceSnapshot, MemoryItem,
+    ModelSetting, PermissionModeRequest, PreferenceKind, ProjectNode, RuntimeRequest,
+    SavePreferenceRequest, SaveSettingsRequest, SessionItem, SettingsSnapshot, ToolStatus,
+    TraceStep, UiPreference, UsageSnapshot,
 };
 pub use error::{DesktopError, DesktopResult};
 pub use store::DesktopPreferenceStore;
@@ -585,6 +585,29 @@ async fn agent_session_events(
 }
 
 #[tauri::command]
+async fn agent_add_reference(
+    state: tauri::State<'_, DesktopState>,
+    request: AddReferenceRequest,
+) -> DesktopResult<serde_json::Value> {
+    let agent = state.agent().await;
+    let ctx = agent.contexts();
+    let req = core_agent::AddReferenceRequest {
+        session_id: request.session_id,
+        reference_type: request.reference_type,
+        locator: serde_json::Value::Null,
+        snapshot: request.snapshot,
+        metadata: None,
+        path: request.path,
+        start_line: request.start_line,
+        end_line: request.end_line,
+        content: request.content,
+        message_id: request.message_id,
+    };
+    let resp = ctx.add_reference(req).await.map_err(agent_error)?;
+    Ok(serde_json::to_value(&resp).map_err(agent_error)?)
+}
+
+#[tauri::command]
 async fn agent_open_file(
     path: String,
     line: Option<usize>,
@@ -765,6 +788,7 @@ pub fn run() {
             agent_load_workspace,
             agent_load_session,
             agent_send_message,
+            agent_add_reference,
             agent_decide_approval,
             agent_session_events,
             agent_load_settings,

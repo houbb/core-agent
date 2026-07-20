@@ -667,12 +667,35 @@ fn render_messages(frame: &mut Frame<'_>, area: Rect, state: &mut TuiState) {
 }
 
 /// Parse a text line and return Spans with file paths highlighted in BLUE.
-/// Matches patterns like `path/to/file.rs`, `@path/to/file.rs`, `path/to/file.rs:42`.
+/// Also detects code block markers (```lang:path) and renders them as GOLD headers.
 /// Uses regex for reliable pattern matching.
 fn parse_file_paths(text: &str) -> Vec<Span<'static>> {
     use regex::Regex;
     // Known file extensions for validation
     let ext_pattern = r"(?:rs|ts|tsx|js|jsx|py|java|go|rb|c|h|cpp|hpp|cs|swift|kt|scala|vue|svelte|css|scss|less|html|json|yaml|yml|toml|md|sql|sh|bash|zsh|fish|env|gradle|lock|txt|cfg|ini|conf|properties|svg|png|jpg|gif|ico|woff|woff2|ttf)";
+
+    // Check for code block markers first: ```lang:path
+    if text.starts_with("```") {
+        let code_block_re = Regex::new(r"^```(\w+)?(?::([\w./\\-]+))?").expect("valid code block regex");
+        if let Some(cap) = code_block_re.captures(text) {
+            let lang = cap.get(1).map(|m| m.as_str().to_owned()).unwrap_or_default();
+            let source_path = cap.get(2).map(|m| m.as_str().to_owned()).unwrap_or_default();
+            let mut spans = Vec::new();
+            spans.push(Span::styled("```", Style::default().fg(GOLD).add_modifier(Modifier::BOLD)));
+            if !lang.is_empty() {
+                spans.push(Span::styled(lang, Style::default().fg(GOLD)));
+            }
+            if !source_path.is_empty() {
+                spans.push(Span::styled(":", Style::default().fg(GOLD)));
+                spans.push(Span::styled(
+                    source_path,
+                    Style::default().fg(BLUE).add_modifier(Modifier::UNDERLINED),
+                ));
+            }
+            return spans;
+        }
+    }
+
     let re = Regex::new(&format!(
         r"(?:(?:^|\s)(@?[\w./-]+\.{}(?::\d+(?:-\d+)?)?))", ext_pattern
     )).expect("valid file path regex");
