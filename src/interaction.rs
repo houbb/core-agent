@@ -479,6 +479,22 @@ impl InteractionCommandRegistry {
                 1,
                 InteractionCommandRoute::Runtime,
             ),
+            (
+                "plan-reject",
+                "Reject a plan and return to planning",
+                "/plan-reject <id>",
+                1,
+                1,
+                InteractionCommandRoute::Runtime,
+            ),
+            (
+                "plan-replan",
+                "Re-plan from a rejected plan's goal",
+                "/plan-replan <id>",
+                1,
+                1,
+                InteractionCommandRoute::Runtime,
+            ),
             // ── Cognitive commands (Phase 4) ──
             (
                 "reason",

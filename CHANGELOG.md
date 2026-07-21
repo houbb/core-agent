@@ -1,5 +1,54 @@
 # CHANGELOG
 
+## [0.40.0] - 2026-07-21
+
+### P040 Plan + Ask 模块澄清补全 — 对标 Claude Code Plan Mode
+
+实现 `design-docs/040-plan-and-ask.md` 中定义的 Plan + Ask 模块补全，将 Plan 从后端自动机制升级为用户可感知、可交互、可审批的 Plan Mode。
+
+#### 🔴 Plan 审批流程增强 (P0)
+
+- **`/plan-reject` 命令** — 拒绝计划，将 Plan 状态置为 `Cancelled`，带面板输出
+- **`/plan-replan` 命令** — 从被拒绝计划的 Goal 重建新计划，带 Re-plan 面板
+- **`/plan-approve` 增强** — 面板式输出（带 ⬜/✅ 标记的任务列表 + 执行状态）
+- **`/plan-show` 增强** — 展示 Goal→Task→Step 完整层级结构
+
+#### 🟡 Plan Mode 模式切换 (P1)
+
+- **Plan Mode 状态管理** — `EnterpriseAgent` 新增 `plan_mode: RwLock<bool>` 字段
+- **`set_plan_mode()` / `plan_mode()` 方法** — 公开 API 管理 Plan Mode 状态
+- **只读约束** — Plan Mode 激活时，所有工具调用强制只读（继承已有的 `tool_allowed_in_read_only` 过滤）
+- **Plan Mode 入口/出口** — `/plan` 自动进入 Plan Mode，`/plan-approve` 和 `/plan-reject` 退出 Plan Mode
+- **`[Plan Mode]` 标识** — 响应中添加 Plan Mode 状态指示
+
+#### 🟡 Todo 连接 PlanningManager (P1)
+
+- **TodoAddTool** — 新增 `planning` 字段，支持 `plan_id` 参数，从 Plan Task 列表创建 Todo
+- **TodoListTool** — 新增 `planning` 字段，支持 `plan_id` 参数，读取 Plan Task 作为 Todo 列表（带 ⬜/✅/⏳ 标记）
+- **TodoUpdateTool** — 新增 `planning` 字段，支持 `plan_id`/`task_id` 参数，同步 Todo 状态到 Plan
+- **todo-runtime provider** — 注册三个带 PlanningManager 的工具，遵循 `plan-runtime` 注册模式
+
+#### 🟡 Auto-Reflection 集成 (P1)
+
+- **`auto_reflect_if_needed()` 方法** — `/plan-approve` 执行完成后自动调用 `/reflect` 认知命令
+- **Reflection 事件** — `reflection_completed` 事件发出，包含 Reflection 内容
+- **Reflection 输出** — 追加到响应末尾（`---\n\n## Reflection\n\n...`）
+
+#### 🛠 架构变更
+
+- **`EnterpriseAgent`** — 新增 `plan_mode` 字段 + `auto_reflect_if_needed` 方法
+- **`todo.*` 工具** — 从 stub 升级为带 PlanningManager 的实现
+- **`core-agent-tool/src/builtin/todo/`** — 新增 `*_with_planning` 工厂函数
+- **`src/interaction.rs`** — 注册 `plan-reject`、`plan-replan` 两个新 Runtime 命令
+
+#### ✅ 验证
+
+- `cargo check` 编译通过
+- `cargo test -p core-agent-plan` — 11+10 个测试全部通过
+- `cargo test -p core-agent-tool --lib` — 110 个测试全部通过
+- `cargo test --lib` — 94 个测试全部通过
+- `cargo test --test planning_runtime_integration` — 通过
+
 ## [0.39.1] - 2026-07-20
 
 ### P039 Phase 5: `@` 上下文引用 UI 全面增强 — 对标 Claude Code

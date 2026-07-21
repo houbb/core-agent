@@ -374,6 +374,7 @@ pub struct EnterpriseAgent {
     hooks: Option<Arc<crate::HookRuntime>>,
     trace_store: Arc<SqliteTraceStore>,
     trace_collector: TraceCollector,
+    plan_mode: RwLock<bool>,
 }
 
 #[derive(Default)]
@@ -702,6 +703,73 @@ impl EnterpriseAgent {
             );
             tools.load_provider(&plan_provider).await.map_err(tool_error)?;
         }
+        // Register real todo tools connected to PlanningManager
+        {
+            let todo_add = core_agent_tool::builtin::todo::todo_add_tool_with_planning(planning.clone());
+            let todo_list = core_agent_tool::builtin::todo::todo_list_tool_with_planning(planning.clone());
+            let todo_update = core_agent_tool::builtin::todo::todo_update_tool_with_planning(planning.clone());
+
+            let todo_provider = StaticToolProvider::new(
+                ToolProviderDefinition::new(
+                    "todo-runtime",
+                    "Runtime Todo Tools",
+                    ToolProviderKind::Builtin,
+                ),
+                vec![
+                    {
+                        let mut def = ToolDefinition::new(
+                            "todo-runtime", "todo.add", "1.0.0",
+                            serde_json::json!({
+                                "type": "object",
+                                "properties": {
+                                    "task": {"type": "string", "description": "Task description"},
+                                    "plan_id": {"type": "string", "description": "Optional plan ID to associate with"}
+                                },
+                                "required": ["task"]
+                            }),
+                        );
+                        def.default_permission = PermissionDecision::Allow;
+                        def.timeout_ms = 30000;
+                        ToolRegistration::new(def, todo_add)
+                    },
+                    {
+                        let mut def = ToolDefinition::new(
+                            "todo-runtime", "todo.list", "1.0.0",
+                            serde_json::json!({
+                                "type": "object",
+                                "properties": {
+                                    "plan_id": {"type": "string", "description": "Optional plan ID to list tasks from"}
+                                },
+                                "additionalProperties": false
+                            }),
+                        );
+                        def.default_permission = PermissionDecision::Allow;
+                        def.timeout_ms = 30000;
+                        ToolRegistration::new(def, todo_list)
+                    },
+                    {
+                        let mut def = ToolDefinition::new(
+                            "todo-runtime", "todo.update", "1.0.0",
+                            serde_json::json!({
+                                "type": "object",
+                                "properties": {
+                                    "id": {"type": "integer", "description": "Todo item ID"},
+                                    "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "cancelled"], "description": "New status"},
+                                    "plan_id": {"type": "string", "description": "Optional plan ID"},
+                                    "task_id": {"type": "string", "description": "Optional task ID"},
+                                    "version": {"type": "integer", "description": "Expected plan version"}
+                                },
+                                "required": ["id", "status"]
+                            }),
+                        );
+                        def.default_permission = PermissionDecision::Allow;
+                        def.timeout_ms = 30000;
+                        ToolRegistration::new(def, todo_update)
+                    },
+                ],
+            );
+            tools.load_provider(&todo_provider).await.map_err(tool_error)?;
+        }
         let platform = Arc::new(PlatformManager::builder().build());
         let kernel = Arc::new(RuntimeKernel::builder().build());
         let platform_adapter = Arc::new(crate::integrations::PlatformKernelRuntime::new(
@@ -842,6 +910,7 @@ impl EnterpriseAgent {
             hooks,
             trace_store,
             trace_collector,
+            plan_mode: RwLock::new(false),
         })
     }
 
@@ -912,6 +981,16 @@ impl EnterpriseAgent {
         let _operation = self.operation_lock.lock().await;
         *self.permission_mode.write().await = permission_mode;
         Ok(())
+    }
+
+    /// Plan Mode — when enabled, the Agent runs in read-only mode
+    /// (no file writes, no side effects) until the plan is approved.
+    pub async fn plan_mode(&self) -> bool {
+        *self.plan_mode.read().await
+    }
+
+    pub async fn set_plan_mode(&self, enabled: bool) {
+        *self.plan_mode.write().await = enabled;
     }
 
     pub async fn usage_buckets(&self, days: u32) -> EnterpriseAgentResult<Vec<UsageBucket>> {
@@ -1443,11 +1522,30 @@ impl EnterpriseAgent {
                 let plan = self.runtimes.planning.find_plan(plan_id).await
                     .map_err(|e| EnterpriseAgentError::Runtime(e.to_string()))?
                     .ok_or_else(|| EnterpriseAgentError::InvalidArgument("plan not found".into()))?;
+                let goal = self.runtimes.planning.find_goal(plan.goal_id).await
+                    .map_err(|e| EnterpriseAgentError::Runtime(e.to_string()))?
+                    .ok_or_else(|| EnterpriseAgentError::InvalidArgument("goal not found".into()))?;
 
                 // Transition plan to Ready
                 let plan = self.runtimes.planning.transition_plan(
                     plan_id, plan.version, PlanStatus::Ready, "user"
                 ).await.map_err(|e| EnterpriseAgentError::Runtime(e.to_string()))?;
+
+                let mut response = format!(
+                    "\n╔══════════════════════════════════════════════════╗\n\
+                     ║               📋 Plan Approved                  ║\n\
+                     ╚══════════════════════════════════════════════════╝\n\n\
+                     Plan: {}\nGoal: {}\nStatus: {}\n\n",
+                    plan.id, goal.title, plan.status.as_str()
+                );
+                for (i, task) in plan.tasks.values().enumerate() {
+                    let marker = if task.status.as_str() == "COMPLETED" { "✅" } else { "⬜" };
+                    response.push_str(&format!("  {}  {}. {}  [{}]\n", marker, i + 1, task.name, task.status.as_str()));
+                    for step in task.steps.values() {
+                        response.push_str(&format!("       - {} [{}]\n", step.name, step.status.as_str()));
+                    }
+                }
+                response.push_str("\n  Starting execution...\n");
 
                 // Execute the plan
                 let execution = self.runtimes.execution.execute(
@@ -1455,20 +1553,73 @@ impl EnterpriseAgent {
                     ExecuteRequest::new("user"),
                 ).await.map_err(|e| EnterpriseAgentError::Runtime(e.to_string()))?;
 
-                let mut response = format!(
-                    "Plan approved and execution started.\nPlan ID: {}\nExecution ID: {}\nStatus: {}\n\nProgress:\n",
-                    plan.id, execution.id, execution.status.as_str()
-                );
-                for task in plan.tasks.values() {
-                    let status = task.status.as_str();
-                    let marker = if status == "COMPLETED" { "x" } else { " " };
-                    response.push_str(&format!("  [{}] {}  [{}]\n", marker, task.name, status));
-                    for step in task.steps.values() {
-                        response.push_str(&format!("    - {} [{}]\n", step.name, step.status.as_str()));
-                    }
-                }
+                response.push_str(&format!(
+                    "\n  Execution ID: {}\n  Status: {}\n",
+                    execution.id, execution.status.as_str()
+                ));
                 outcome.response = response;
                 outcome.data = json!({"planId": plan.id, "executionId": execution.id, "status": execution.status.as_str()});
+                // Exit plan mode after approving
+                self.set_plan_mode(false).await;
+            }
+            "plan-reject" => {
+                let id_str = invocation.arguments.first().ok_or_else(|| {
+                    EnterpriseAgentError::InvalidArgument("plan id is required".into())
+                })?;
+                let plan_id = Uuid::parse_str(id_str)
+                    .map_err(|_| EnterpriseAgentError::InvalidArgument("invalid plan id".into()))?;
+                let plan = self.runtimes.planning.find_plan(plan_id).await
+                    .map_err(|e| EnterpriseAgentError::Runtime(e.to_string()))?
+                    .ok_or_else(|| EnterpriseAgentError::InvalidArgument("plan not found".into()))?;
+                let goal = self.runtimes.planning.find_goal(plan.goal_id).await
+                    .map_err(|e| EnterpriseAgentError::Runtime(e.to_string()))?
+                    .ok_or_else(|| EnterpriseAgentError::InvalidArgument("goal not found".into()))?;
+
+                // Reject the plan (transition to Cancelled)
+                let plan = self.runtimes.planning.transition_plan(
+                    plan_id, plan.version, PlanStatus::Cancelled, "user"
+                ).await.map_err(|e| EnterpriseAgentError::Runtime(e.to_string()))?;
+
+                outcome.response = format!(
+                    "\n╔══════════════════════════════════════════════════╗\n\
+                     ║               ❌ Plan Rejected                  ║\n\
+                     ╚══════════════════════════════════════════════════╝\n\n\
+                     Plan: {}\nGoal: {}\nStatus: {}\n\n\
+                     The plan has been rejected. Use /plan-replan {} to create a new plan for the same goal.",
+                    plan.id, goal.title, plan.status.as_str(), plan.id
+                );
+                outcome.data = json!({"planId": plan.id, "status": plan.status.as_str(), "decision": "REJECTED"});
+                // Exit plan mode after rejecting
+                self.set_plan_mode(false).await;
+            }
+            "plan-replan" => {
+                let id_str = invocation.arguments.first().ok_or_else(|| {
+                    EnterpriseAgentError::InvalidArgument("plan id is required".into())
+                })?;
+                let plan_id = Uuid::parse_str(id_str)
+                    .map_err(|_| EnterpriseAgentError::InvalidArgument("invalid plan id".into()))?;
+                let plan = self.runtimes.planning.find_plan(plan_id).await
+                    .map_err(|e| EnterpriseAgentError::Runtime(e.to_string()))?
+                    .ok_or_else(|| EnterpriseAgentError::InvalidArgument("plan not found".into()))?;
+                let goal = self.runtimes.planning.find_goal(plan.goal_id).await
+                    .map_err(|e| EnterpriseAgentError::Runtime(e.to_string()))?
+                    .ok_or_else(|| EnterpriseAgentError::InvalidArgument("goal not found".into()))?;
+
+                // Create a new plan for the same goal
+                let context = core_agent_plan::PlanningContext::default();
+                let new_plan = self.runtimes.planning.create_plan(
+                    core_agent_plan::CreatePlanRequest::new(goal.id, context)
+                ).await.map_err(|e| EnterpriseAgentError::Runtime(e.to_string()))?;
+
+                outcome.response = format!(
+                    "\n╔══════════════════════════════════════════════════╗\n\
+                     ║             🔄 Re-plan Created                  ║\n\
+                     ╚══════════════════════════════════════════════════╝\n\n\
+                     Goal: {}\nNew Plan ID: {}\nStatus: {}\n\n\
+                     Review the new plan and approve it with /plan-approve {}",
+                    goal.title, new_plan.id, new_plan.status.as_str(), new_plan.id
+                );
+                outcome.data = json!({"planId": new_plan.id, "goalId": goal.id, "status": new_plan.status.as_str()});
             }
             // ── Workflow commands (Phase 5) ──
             "workflow" => {
@@ -2146,6 +2297,9 @@ impl EnterpriseAgent {
         } else {
             (None, false)
         };
+        // Plan Mode overrides — if the agent is in plan mode, force read-only
+        let plan_mode = *self.plan_mode.read().await;
+        let read_only = read_only || plan_mode;
         let mentions = ContextMentionResolver::new(self.config.context_mentions.clone())
             .map_err(|error| EnterpriseAgentError::Configuration(error.to_string()))?
             .resolve(&self.config.workspace, &message)
@@ -2187,7 +2341,7 @@ impl EnterpriseAgent {
         let mut events = vec![EnterpriseAgentEvent {
             kind: "execution_started".into(),
             message: "Enterprise Agent accepted the request".into(),
-            data: json!({"sessionId": session_id, "requestId": request_id, "readOnly": read_only}),
+            data: json!({"sessionId": session_id, "requestId": request_id, "readOnly": read_only, "planMode": plan_mode}),
         }];
         if !mentions.is_empty() {
             events.push(EnterpriseAgentEvent {
@@ -2588,6 +2742,16 @@ impl EnterpriseAgent {
         } else {
             response_text
         };
+
+        // Auto-reflection after plan execution (/plan-approve completed)
+        let response_text = self.auto_reflect_if_needed(&message, &response_text, &mut events).await;
+
+        // Plan Mode indicator — show [Plan Mode] badge when active
+        let response_text = if plan_mode && !response_text.starts_with("[Plan Mode]") {
+            format!("[Plan Mode]\n\n{}", response_text)
+        } else {
+            response_text
+        };
         if let Err(error) = self
             .append_completed_message(&conversation.id, "ASSISTANT", &response_text)
             .await
@@ -2788,6 +2952,66 @@ impl EnterpriseAgent {
             .await
             .map_err(session_error)?;
         Ok(())
+    }
+
+    /// Auto-reflection after plan execution — /plan-approve triggers a /reflect
+    async fn auto_reflect_if_needed(
+        &self,
+        message: &str,
+        response_text: &str,
+        events: &mut Vec<EnterpriseAgentEvent>,
+    ) -> String {
+        // Only auto-reflect when the user approved a plan
+        if !message.starts_with("/plan-approve") {
+            return response_text.to_string();
+        }
+
+        // Build a /reflect prompt
+        let reflect_prompt = format!(
+            "Execute the built-in /reflect command.\n\n\
+             Arguments: [\"plan execution\"]\n\n\
+             ## Instruction\n\
+             Reflect on the completed plan execution. Identify what was accomplished, \
+             what problems occurred, and what was learned.\n\n\
+             ## Output Format\n\
+             ```reflection\n\
+             Task: ...\n\
+             Result: ...\n\
+             What worked:\n\
+             Problems:\n\
+             Learned:\n\
+             ```\n\n\
+             ## Rules\n\
+             - Do NOT output your internal chain-of-thought.\n\
+             - Only output the structured result.\n\
+             - Be concise and actionable."
+        );
+
+        let reflect_request = ModelRequest::new(vec![
+            core_agent_model::ModelMessage::text(
+                core_agent_model::ModelRole::User,
+                reflect_prompt,
+            ),
+        ])
+        .with_profile(&self.config.model.profile);
+
+        let reflect_result = self.models.generate(reflect_request).await;
+        match reflect_result {
+            Ok(reflect_response) => {
+                let reflect_text = reflect_response.text();
+                if !reflect_text.is_empty() {
+                    events.push(EnterpriseAgentEvent {
+                        kind: "reflection_completed".into(),
+                        message: "Auto-reflection after plan execution".into(),
+                        data: json!({"reflection": reflect_text}),
+                    });
+                    format!("{}\n\n---\n\n## Reflection\n\n{}", response_text, reflect_text)
+                } else {
+                    response_text.to_string()
+                }
+            }
+            Err(_) => response_text.to_string(),
+        }
     }
 
     async fn record_failure(
