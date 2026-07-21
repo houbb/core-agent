@@ -67,6 +67,10 @@ impl DesktopApprovalBroker {
         }
     }
 
+    fn app_handle(&self) -> tauri::AppHandle {
+        self.app.clone()
+    }
+
     fn resolve(
         &self,
         approval_id: uuid::Uuid,
@@ -389,6 +393,22 @@ async fn agent_send_message(
         )
         .await
         .map_err(agent_error)?;
+
+    // ── Spawn real-time event emitter for streaming Agent events ──
+    let app_handle = state.approvals.app_handle();
+    let event_agent = agent.clone();
+    let session_id = run.session_id;
+    tokio::spawn(async move {
+        let mut rx = event_agent.subscribe_events();
+        while let Ok(event) = rx.recv().await {
+            let step = trace_step_from_event(session_id, &event);
+            let _ = app_handle.emit("agent-event", step);
+            if event.is_terminal() {
+                break;
+            }
+        }
+    });
+
     Ok(AgentSubmission {
         session_id: Some(run.session_id),
         response: None,
@@ -484,6 +504,7 @@ async fn agent_save_settings(
             max_context_tokens: input.max_context_tokens,
             api_key: input.api_key,
             api_key_ref: input.api_key_ref,
+            stream: true,
         });
     }
     let update = UserConfigUpdate {
@@ -671,34 +692,40 @@ fn trace_steps(session_id: uuid::Uuid, events: Vec<EnterpriseAgentEvent>) -> Vec
     events
         .into_iter()
         .enumerate()
-        .map(|(index, event)| {
-            let (kind, state) = match event.kind.as_str() {
-                "execution_finished" => ("response", "COMPLETED"),
-                "execution_failed" => ("error", "FAILED"),
-                "cancelled" => ("cancelled", "CANCELLED"),
-                _ => (event.kind.as_str(), "COMPLETED"),
-            };
-            let duration_ms = event
-                .data
-                .get("wallDurationMs")
-                .or_else(|| event.data.pointer("/usage/latency_ms"))
-                .and_then(serde_json::Value::as_u64);
-            let tokens = event
-                .data
-                .pointer("/usage/total_tokens")
-                .or_else(|| event.data.get("tokens"))
-                .and_then(serde_json::Value::as_u64);
-            TraceStep {
-                id: format!("{session_id}:{index}"),
-                kind: kind.into(),
-                title: event.kind.replace('_', " "),
-                state: state.into(),
-                duration_ms,
-                tokens,
-                summary: matches!(kind, "response" | "error").then_some(event.message),
-            }
-        })
+        .map(|(index, event)| trace_step(session_id, index, &event))
         .collect()
+}
+
+fn trace_step(session_id: uuid::Uuid, index: usize, event: &EnterpriseAgentEvent) -> TraceStep {
+    let (kind, state) = match event.kind.as_str() {
+        "execution_finished" => ("response", "COMPLETED"),
+        "execution_failed" => ("error", "FAILED"),
+        "cancelled" => ("cancelled", "CANCELLED"),
+        _ => (event.kind.as_str(), "COMPLETED"),
+    };
+    let duration_ms = event
+        .data
+        .get("wallDurationMs")
+        .or_else(|| event.data.pointer("/usage/latency_ms"))
+        .and_then(serde_json::Value::as_u64);
+    let tokens = event
+        .data
+        .pointer("/usage/total_tokens")
+        .or_else(|| event.data.get("tokens"))
+        .and_then(serde_json::Value::as_u64);
+    TraceStep {
+        id: format!("{session_id}:{index}"),
+        kind: kind.into(),
+        title: event.kind.replace('_', " "),
+        state: state.into(),
+        duration_ms,
+        tokens,
+        summary: matches!(kind, "response" | "error").then_some(event.message.clone()),
+    }
+}
+
+fn trace_step_from_event(session_id: uuid::Uuid, event: &EnterpriseAgentEvent) -> TraceStep {
+    trace_step(session_id, 0, event)
 }
 
 fn agent_error(error: impl std::fmt::Display) -> DesktopError {

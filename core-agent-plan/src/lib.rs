@@ -17,6 +17,7 @@ pub use error::{PlanError, PlanResult};
 pub use infrastructure::*;
 pub use manager::{GoalManager, PlanningManager, PlanningManagerBuilder, StepManager, TaskManager};
 pub use defaults::ExternalPlanBuilder;
+pub use defaults::LLMPlanBuilder;
 pub use persistence::SqlitePlanningStore;
 
 pub type PlanningRuntime = PlanningManager;

@@ -24,8 +24,10 @@ use tokio::sync::{mpsc, oneshot};
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
-    CliApplication, CliResult, ProfessionalApplication, TerminalAgentClient, TerminalRenderer,
+    CliApplication, CliResult, EventStream, ProfessionalApplication, Renderer, TerminalAgentClient,
+    TerminalRenderer,
 };
+use futures_util::StreamExt;
 
 const GOLD: Color = Color::Rgb(246, 193, 67);
 const BLUE: Color = Color::Rgb(99, 179, 237);
@@ -498,11 +500,39 @@ pub async fn run_tui(
                             let sender = result_sender.clone();
                             let app = application.clone();
                             let commands = professional.clone();
+                            let renderer = TerminalRenderer::new(true);
                             active = Some(tokio::spawn(async move {
                                 let result = if source.starts_with('/') {
                                     commands.execute_line(&source).await
                                 } else {
-                                    app.chat(source.clone()).await.map(|output| output.lines)
+                                    // ── Streaming path: emit events incrementally ──
+                                    match app.stream_chat(source.clone()).await {
+                                        Ok(mut stream) => {
+                                            while let Some(event) = stream.next().await {
+                                                match event {
+                                                    Ok(ev) => {
+                                                        let line = renderer.event(&ev);
+                                                        let _ = sender.send(RunResult {
+                                                            source: source.clone(),
+                                                            result: Ok(vec![line]),
+                                                        });
+                                                        if ev.is_terminal() {
+                                                            break;
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        let _ = sender.send(RunResult {
+                                                            source: source.clone(),
+                                                            result: Err(e),
+                                                        });
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                            return;
+                                        }
+                                        Err(e) => Err(e),
+                                    }
                                 };
                                 let _ = sender.send(RunResult { source, result });
                             }));

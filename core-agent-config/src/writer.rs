@@ -371,6 +371,7 @@ mod tests {
                 max_context_tokens: DEFAULT_MAX_CONTEXT_TOKENS,
                 api_key: None,
                 api_key_ref: None,
+                stream: true,
             }],
             compression: ConfigCompression::default(),
         };

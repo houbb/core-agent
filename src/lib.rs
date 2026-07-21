@@ -53,7 +53,7 @@ pub use mcp_runtime::{
     discover_mcp_servers, McpClient, McpRuntimeError, McpRuntimeResult, McpServerConfig,
     McpToolProvider,
 };
-pub use subagent_runtime::{SubAgentOutcome, SubAgentProfile, SubAgentRuntime};
+pub use subagent_runtime::{SubAgentOutcome, SubAgentProfile};
 pub use web_runtime::{
     OpenAiWebSearchProvider, WebDomainPolicy, WebFetchResult, WebRuntime, WebRuntimeError,
     WebRuntimeResult, WebSearchProvider, WebSearchRequest, WebSearchResult, WebSource,
@@ -223,6 +223,25 @@ pub use core_agent_multi::{
     MultiAgentResult, MultiAgentRuntime, MultiAgentStage, MultiAgentStore, Organization,
     Role as MultiAgentRole, RoutingCandidate, SqliteMultiAgentStore, Team, TeamLifecycle,
     TeamPolicyDefinition, TeamState, UnavailableAgentDirectory, UnavailableAgentDispatcher,
+};
+pub use core_agent_subagent as subagent_module;
+pub use core_agent_subagent::{
+    AgentInstance, AgentRole, DefaultSubAgentFactory, DefaultSubAgentLifecycle,
+    InMemorySubAgentStore, InstanceType, SqliteSubAgentStore, SubAgentError, SubAgentFactory,
+    SubAgentInterceptor, SubAgentLifecycle, SubAgentManager, SubAgentManagerBuilder,
+    SubAgentObserver, SubAgentResult, SubAgentRuntime, SubAgentStatus, SubAgentStore,
+};
+pub use core_agent_message as message_runtime;
+pub use core_agent_message::{
+    DefaultMessageBus, InMemoryMessageStore, MessageBus, MessageError,
+    MessageInterceptor, MessageManager, MessageManagerBuilder, MessageObserver,
+    MessageResult, MessageRuntime, MessageStore, MessageType, SqliteMessageStore,
+};
+pub use core_agent_orchestrator as orchestrator_runtime;
+pub use core_agent_orchestrator::{
+    AggregatedResult, AgentInstanceRef, Orchestration, OrchestratorError, OrchestratorManager,
+    OrchestratorManagerBuilder, OrchestratorResult, OrchestrationStatus, OrchestrationStrategy,
+    OrchestrationStore, WorkerResult,
 };
 pub use core_agent_plan as planning_runtime;
 pub use core_agent_plan::{

@@ -193,17 +193,23 @@ CORE_AGENT_PERMISSION_MODE    # strict / risk-based / auto
 
 ```
 core-agent/
-├── core-agent-tool/       # 工具运行时（发现、校验、权限、执行、审计）
-├── core-agent-session/    # 会话管理
-├── core-agent-context/    # 上下文构建
-├── core-agent-model/      # 模型运行时
-├── core-agent-plan/       # 规划引擎
-├── core-agent-memory/     # 记忆持久化
-├── core-agent-multi/      # 多 Agent 运行时（团队/角色/协作）
-├── core-agent-collaboration/ # 协作平台（项目/任务/审查）
-├── agent-cli/             # Terminal 客户端
-├── agent-desktop/         # Desktop 客户端（Tauri + Vue 3）
-└── src/                   # EnterpriseAgent 组合入口
+├── core-agent-tool/          # 工具运行时（发现、校验、权限、执行、审计）
+├── core-agent-session/       # 会话管理
+├── core-agent-context/       # 上下文构建
+├── core-agent-model/         # 模型运行时
+├── core-agent-plan/          # 规划引擎（Goal→Plan→Task→Step→DAG）
+├── core-agent-execution/     # 执行引擎（Command→Retry→Rollback→Checkpoint）
+├── core-agent-memory/        # 记忆持久化
+├── core-agent-question/      # 人机协作（Choice/Confirm/Input/Approval/Review）
+├── core-agent-todo/          # 进度追踪（用户可见任务列表）
+├── core-agent-reflection/    # 自我评估（评分/建议/重试控制）
+├── core-agent-multi/         # 多 Agent 运行时（团队/角色/协作）
+├── core-agent-subagent/       # SubAgent 运行时（创建/生命周期/注册）
+├── core-agent-message/        # Agent 消息总线（Send/Receive/Broadcast/Mailbox）
+├── core-agent-orchestrator/   # 多 Agent 编排（Sequential/Parallel/Supervisor/Debate）
+├── agent-cli/                # Terminal 客户端
+├── agent-desktop/            # Desktop 客户端（Tauri + Vue 3）
+└── src/                      # EnterpriseAgent 组合入口
 ```
 
 ---
@@ -222,6 +228,10 @@ core-agent/
 | `/tools` | 工具列表 |
 | `/config` | 查看配置 |
 | `/plan` | 制定计划 |
+| `/plan-approve` | 审批通过，开始执行 |
+| `/plan-reject` | 拒绝计划 |
+| `/plan-replan` | 从 Goal 重建计划 |
+| `/plan-show` | 查看计划详情（Goal→Task→Step） |
 | `/review` | 代码审查 |
 | `/test` | 测试分析/生成/诊断（Test Agent） |
 | `/debug-agent` | 错误诊断/根因分析（Debug Agent） |
@@ -244,8 +254,23 @@ core-agent/
 | `/team` | 团队创建与管理 |
 | `/roles` | 查看角色能力矩阵 |
 | `/collaborate` | 查看协作过程 |
+| `/subagent list` | 列出子 Agent 实例 |
+| `/subagent spawn` | 创建子 Agent（指定角色和任务） |
+| `/subagent status` | 查看子 Agent 状态 |
+| `/subagent destroy` | 销毁子 Agent |
+| `/orchestrate` | 多 Agent 编排（sequential/parallel/supervisor/debate） |
+| `/orchestrate status` | 查看编排任务状态 |
+| `/message send` | 向 Agent 发送消息 |
+| `/message inbox` | 查看 Agent 收件箱 |
 
-### Agent 委派
+### RCA Demo
+
+```bash
+# 一键启动 RCA 根因分析
+/orchestrate supervisor "订单服务 500"
+```
+
+Supervisor Agent 自动创建 Log/Metric/Trace 三个 Researcher SubAgent，并行分析后聚合输出 Root Cause 和置信度。
 
 通过 `delegate_task` 工具可调用 9 种 SubAgent Profile：
 

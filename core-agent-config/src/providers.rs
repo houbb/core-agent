@@ -182,6 +182,7 @@ impl ConfigProvider for EnvironmentConfigProvider {
             api_key: self.values.get("CORE_AGENT_API_KEY").cloned(),
             api_key_ref: None,
             api_key_env: None,
+            stream: None,
         };
         let permissions = self
             .values

@@ -5,7 +5,7 @@ use futures_util::StreamExt;
 use uuid::Uuid;
 
 use crate::{
-    AgentClient, AgentRequest, CliConfig, CliError, CliResult, LocalSessionState, Renderer,
+    AgentClient, AgentRequest, CliConfig, CliError, CliResult, EventStream, LocalSessionState, Renderer,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +45,31 @@ impl<C: AgentClient + ?Sized, R: Renderer> CliApplication<C, R> {
     pub async fn chat(&self, goal: impl Into<String>) -> CliResult<CommandOutput> {
         let state = LocalSessionState::load(&self.root)?;
         self.submit(goal.into(), state.current_session_id).await
+    }
+
+    /// Stream chat: submit a goal and return the raw EventStream for real-time consumption.
+    /// Skips the batch `collect()` step — the caller polls events incrementally.
+    pub async fn stream_chat(&self, goal: impl Into<String>) -> CliResult<EventStream> {
+        let state = LocalSessionState::load(&self.root)?;
+        let workspace = self
+            .root
+            .canonicalize()
+            .unwrap_or_else(|_| self.root.clone())
+            .to_string_lossy()
+            .into_owned();
+        let request = AgentRequest {
+            session_id: state.current_session_id,
+            message: goal.into(),
+            workspace,
+        };
+        request.validate()?;
+        let submission = self.client.send(request).await?;
+        if !submission.accepted {
+            return Err(CliError::Api("Agent API did not accept the goal".into()));
+        }
+        let mut session_state = LocalSessionState::load(&self.root)?;
+        session_state.record(&self.root, submission.session_id)?;
+        self.client.stream(submission.session_id).await
     }
 
     pub fn begin_chat(&self) -> CliResult<()> {

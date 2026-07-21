@@ -138,12 +138,18 @@ export class TauriDesktopApi implements DesktopApi {
   }
 
   subscribe(sessionId: string, onEvent: (event: TraceStep) => void): () => void {
-    let active = true;
+    let unlistenFn: (() => void) | undefined;
+    let unlisten: Promise<() => void> | undefined;
+    // Also load any existing historical events
     void invoke<TraceStep[]>("agent_session_events", { sessionId }).then((events) => {
-      if (active) events.forEach(onEvent);
+      events.forEach(onEvent);
+    });
+    // Listen for real-time streaming events pushed from Rust via Tauri
+    unlisten = listen<TraceStep>("agent-event", (payload) => {
+      onEvent(payload.payload);
     });
     return () => {
-      active = false;
+      unlisten?.then((fn) => fn());
     };
   }
 

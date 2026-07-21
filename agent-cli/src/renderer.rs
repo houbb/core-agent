@@ -36,10 +36,37 @@ impl Renderer for TerminalRenderer {
 
     fn event(&self, event: &AgentEvent) -> String {
         let label = event.kind.replace('_', " ");
-        if event.message.is_empty() {
+        let base = if event.message.is_empty() {
             self.gold(&label)
         } else {
             format!("{}: {}", self.gold(&label), event.message)
+        };
+        // P1: render todo and reflection events with special formatting
+        match event.kind.as_str() {
+            "todo_list" => {
+                if let Some(todos) = event.data.get("todos").and_then(|v| v.as_array()) {
+                    let mut lines = vec![format!("  {}", self.gold("Todo List"))];
+                    for todo in todos {
+                        let status = todo.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+                        let content = todo.get("content").and_then(|v| v.as_str()).unwrap_or("?");
+                        let icon = match status {
+                            "COMPLETED" => "x",
+                            "IN_PROGRESS" => ">",
+                            _ => " ",
+                        };
+                        lines.push(format!("  [{}] {}", icon, content));
+                    }
+                    return lines.join("\n");
+                }
+                base
+            }
+            "reflection_completed" => {
+                if let Some(reflection) = event.data.get("reflection").and_then(|v| v.as_str()) {
+                    return format!("{}\n  {}", self.gold("Reflection"), reflection);
+                }
+                base
+            }
+            _ => base,
         }
     }
 

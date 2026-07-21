@@ -89,16 +89,23 @@ impl EmbeddedAgentClient {
     }
 
     async fn event_stream(&self, session_id: Uuid) -> CliResult<EventStream> {
-        let events = self.runtime.events(session_id).await;
-        let events = events.into_iter().map(|event| {
-            let data = serde_json::to_value(&event)?;
-            Ok(AgentEvent {
-                kind: event.kind,
-                message: event.message,
-                data,
-            })
-        });
-        Ok(Box::pin(futures_util::stream::iter(events)))
+        let mut rx = self.runtime.subscribe_events();
+        let output = async_stream::try_stream! {
+            while let Ok(event) = rx.recv().await {
+                let data = serde_json::to_value(&event)?;
+                let agent_event = AgentEvent {
+                    kind: event.kind,
+                    message: event.message,
+                    data,
+                };
+                let is_terminal = agent_event.is_terminal();
+                yield agent_event;
+                if is_terminal {
+                    break;
+                }
+            }
+        };
+        Ok(Box::pin(output))
     }
 }
 

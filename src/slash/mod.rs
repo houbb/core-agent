@@ -62,6 +62,8 @@ pub enum SlashCategory {
     Developer,
     /// 工作流：/workflow, /trigger, /schedule, /run, /observe, /retry
     Workflow,
+    /// 编排：/orchestrate, /subagent, /message
+    Orchestration,
 }
 
 impl SlashCategory {
@@ -80,6 +82,7 @@ impl SlashCategory {
             Self::Society => "society",
             Self::Developer => "developer",
             Self::Workflow => "workflow",
+            Self::Orchestration => "orchestration",
         }
     }
 }
@@ -521,4 +524,5 @@ impl SlashCommandObserver for NoopSlashCommandObserver {
 
 pub mod agent_plugin;
 pub mod commands;
+pub mod p2_plugin;
 pub mod society_plugin;

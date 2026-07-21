@@ -25,10 +25,16 @@ members = [
     "core-agent-governance",
     "core-agent-ecosystem",
     "core-agent-protocol",
+    "core-agent-question",
+    "core-agent-todo",
+    "core-agent-reflection",
+    "core-agent-subagent",
+    "core-agent-message",
+    "core-agent-orchestrator",
 ]
 
 [workspace.package]
-version = "0.38.4"
+version = "0.41.2"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/core-agent/core-agent"
@@ -64,6 +70,12 @@ core-agent-collaboration = { path = "core-agent-collaboration" }
 core-agent-governance = { path = "core-agent-governance" }
 core-agent-ecosystem = { path = "core-agent-ecosystem" }
 core-agent-protocol = { path = "core-agent-protocol" }
+core-agent-question = { path = "core-agent-question" }
+core-agent-todo = { path = "core-agent-todo" }
+core-agent-reflection = { path = "core-agent-reflection" }
+core-agent-subagent = { path = "core-agent-subagent" }
+core-agent-message = { path = "core-agent-message" }
+core-agent-orchestrator = { path = "core-agent-orchestrator" }
 async-trait = "0.1"
 chrono = "0.4"
 serde = { version = "1", features = ["derive"] }
@@ -75,6 +87,8 @@ sha2 = "0.10"
 thiserror = "2"
 tokio = { version = "1", features = ["io-util", "macros", "net", "process", "sync", "time"] }
 tokio-util = "0.7"
+futures-util = "0.3"
+async-stream = "0.3"
 url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 

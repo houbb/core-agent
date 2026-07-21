@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agent-cli"
-version = "0.38.4"
+version = "0.41.2"
 dependencies = [
  "arboard",
  "assert_cmd",
@@ -37,7 +37,7 @@ dependencies = [
 
 [[package]]
 name = "agent-desktop"
-version = "0.38.4"
+version = "0.41.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -794,8 +794,9 @@ dependencies = [
 
 [[package]]
 name = "core-agent"
-version = "0.38.4"
+version = "0.41.2"
 dependencies = [
+ "async-stream",
  "async-trait",
  "chrono",
  "core-agent-agent",
@@ -810,16 +811,23 @@ dependencies = [
  "core-agent-governance",
  "core-agent-kernel",
  "core-agent-memory",
+ "core-agent-message",
  "core-agent-model",
  "core-agent-multi",
+ "core-agent-orchestrator",
  "core-agent-plan",
  "core-agent-platform",
  "core-agent-protocol",
+ "core-agent-question",
+ "core-agent-reflection",
  "core-agent-session",
+ "core-agent-subagent",
+ "core-agent-todo",
  "core-agent-tool",
  "core-agent-visual",
  "core-agent-workflow",
  "core-agent-workspace",
+ "futures-util",
  "regex",
  "reqwest 0.12.28",
  "rusqlite",
@@ -836,7 +844,7 @@ dependencies = [
 
 [[package]]
 name = "core-agent-agent"
-version = "0.38.4"
+version = "0.41.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -854,14 +862,14 @@ dependencies = [
 
 [[package]]
 name = "core-agent-app"
-version = "0.38.4"
+version = "0.41.2"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "core-agent-collaboration"
-version = "0.38.4"
+version = "0.41.2"
 dependencies = [
  "chrono",
  "serde",
@@ -872,7 +880,7 @@ dependencies = [
 
 [[package]]
 name = "core-agent-config"
-version = "0.38.4"
+version = "0.41.2"
 dependencies = [
  "async-trait",
  "serde",
@@ -886,7 +894,7 @@ dependencies = [
 
 [[package]]
 name = "core-agent-context"
-version = "0.38.4"
+version = "0.41.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -904,7 +912,7 @@ dependencies = [
 
 [[package]]
 name = "core-agent-ecosystem"
-version = "0.38.4"
+version = "0.41.2"
 dependencies = [
  "chrono",
  "core-agent-platform",
@@ -916,7 +924,7 @@ dependencies = [
 
 [[package]]
 name = "core-agent-event"
-version = "0.38.4"
+version = "0.41.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -933,7 +941,7 @@ dependencies = [
 
 [[package]]
 name = "core-agent-execution"
-version = "0.38.4"
+version = "0.41.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -951,7 +959,7 @@ dependencies = [
 
 [[package]]
 name = "core-agent-extension"
-version = "0.38.4"
+version = "0.41.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -968,7 +976,7 @@ dependencies = [
 
 [[package]]
 name = "core-agent-governance"
-version = "0.38.4"
+version = "0.41.2"
 dependencies = [
  "chrono",
  "core-agent-platform",
@@ -980,7 +988,7 @@ dependencies = [
 
 [[package]]
 name = "core-agent-kernel"
-version = "0.38.4"
+version = "0.41.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -993,7 +1001,7 @@ dependencies = [
 
 [[package]]
 name = "core-agent-memory"
-version = "0.38.4"
+version = "0.41.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1008,8 +1016,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "core-agent-message"
+version = "0.41.2"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "core-agent-model"
-version = "0.38.4"
+version = "0.41.2"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -1029,7 +1052,7 @@ dependencies = [
 
 [[package]]
 name = "core-agent-multi"
-version = "0.38.4"
+version = "0.41.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1043,8 +1066,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "core-agent-orchestrator"
+version = "0.41.2"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "core-agent-message",
+ "core-agent-subagent",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "core-agent-plan"
-version = "0.38.4"
+version = "0.41.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1064,7 +1104,7 @@ dependencies = [
 
 [[package]]
 name = "core-agent-platform"
-version = "0.38.4"
+version = "0.41.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1079,7 +1119,7 @@ dependencies = [
 
 [[package]]
 name = "core-agent-protocol"
-version = "0.38.4"
+version = "0.41.2"
 dependencies = [
  "chrono",
  "serde",
@@ -1090,8 +1130,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "core-agent-question"
+version = "0.41.2"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "core-agent-reflection"
+version = "0.41.2"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "core-agent-session"
-version = "0.38.4"
+version = "0.41.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1106,8 +1172,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "core-agent-subagent"
+version = "0.41.2"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "core-agent-todo"
+version = "0.41.2"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "core-agent-tool"
-version = "0.38.4"
+version = "0.41.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1131,7 +1225,7 @@ dependencies = [
 
 [[package]]
 name = "core-agent-visual"
-version = "0.38.4"
+version = "0.41.2"
 dependencies = [
  "chrono",
  "serde",
@@ -1140,7 +1234,7 @@ dependencies = [
 
 [[package]]
 name = "core-agent-workflow"
-version = "0.38.4"
+version = "0.41.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1157,7 +1251,7 @@ dependencies = [
 
 [[package]]
 name = "core-agent-workspace"
-version = "0.38.4"
+version = "0.41.2"
 dependencies = [
  "async-trait",
  "chrono",

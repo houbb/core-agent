@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -19,16 +19,22 @@ use core_agent_kernel::{ManagedRuntime, RuntimeKernel};
 use core_agent_memory::MemoryManager;
 use core_agent_model::{
     AgentRequestMetric, ModelCapability, ModelCatalog, ModelManager, ModelManagerBuilder,
-    ModelMessage, ModelProfile, ModelProvider, ModelRequest, ModelRole, ModelToolCall,
-    ModelToolDefinition, OpenAiCompatibleProvider, ProviderDefinition, RequestStatus,
-    SqliteModelStore, UsageBucket, UsageCollector,
+    ModelMessage, ModelProfile, ModelProvider, ModelRequest, ModelResponse, ModelRole,
+    ModelStreamEvent, ModelToolCall, ModelToolDefinition, OpenAiCompatibleProvider,
+    ProviderDefinition, RequestStatus, SqliteModelStore, UsageBucket, UsageCollector,
 };
 use core_agent_multi::MultiAgentManager;
+use core_agent_orchestrator;
+use core_agent_message;
+use core_agent_subagent;
 use core_agent_plan::{PlanStatus, PlanningManager};
 use core_agent_platform::{
     PlatformManager, PlatformOrganization, PlatformPolicy, PolicyEffect, PolicyRule, Tenant,
 };
 use core_agent_protocol::ProtocolRegistry;
+use core_agent_question::{Question, QuestionManager, QuestionOption, QuestionType};
+use core_agent_reflection::{ReflectionManager, ReflectionRequest};
+use core_agent_todo::TodoManager;
 use core_agent_session::{
     AppendMessageRequest, CreateSessionRequest, EventBus, MessageStatus, SessionResponse,
     SessionRuntime, SqliteSessionStore,
@@ -47,6 +53,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, RwLock};
+use tokio::sync::broadcast;
 use tokio::time::Instant;
 use uuid::Uuid;
 
@@ -71,6 +78,7 @@ pub struct EnterpriseAgentConfig {
     pub model: EnterpriseModelConfig,
     pub permission_mode: PermissionMode,
     pub memory_enabled: bool,
+    pub stream_enabled: bool,
     pub context_mentions: ContextMentionLimits,
     pub context_compression: ConfigCompression,
 }
@@ -86,6 +94,7 @@ impl EnterpriseAgentConfig {
             model: EnterpriseModelConfig::default(),
             permission_mode: PermissionMode::RiskBased,
             memory_enabled: true,
+            stream_enabled: true,
             context_mentions: ContextMentionLimits::default(),
             context_compression: ConfigCompression::default(),
         }
@@ -107,6 +116,7 @@ impl EnterpriseAgentConfig {
         };
         runtime.permission_mode = PermissionMode::parse(&config.permissions.mode)?;
         runtime.memory_enabled = config.memory.enabled;
+        runtime.stream_enabled = config.model.stream;
         runtime.context_mentions = ContextMentionLimits {
             max_mentions: config.context.max_mentions,
             max_files: config.context.max_files,
@@ -349,6 +359,12 @@ pub struct EnterpriseRuntimes {
     pub governance: Arc<EnterpriseGovernanceManager>,
     pub ecosystem: Arc<EcosystemManager>,
     pub protocols: Arc<ProtocolRegistry>,
+    pub question: Arc<QuestionManager>,
+    pub todo: Arc<TodoManager>,
+    pub reflection: Arc<ReflectionManager>,
+    pub subagents: Arc<core_agent_subagent::SubAgentManager>,
+    pub messages: Arc<core_agent_message::MessageManager>,
+    pub orchestrator: Arc<core_agent_orchestrator::OrchestratorManager>,
 }
 
 /// The single application composition root. Runtime crates remain modules and
@@ -364,6 +380,7 @@ pub struct EnterpriseAgent {
     workspaces: Arc<WorkspaceManager>,
     runtimes: EnterpriseRuntimes,
     events: RwLock<HashMap<Uuid, Vec<EnterpriseAgentEvent>>>,
+    stream_tx: broadcast::Sender<EnterpriseAgentEvent>,
     operation_lock: Mutex<()>,
     approvals: Arc<EnterpriseApprovalLedger>,
     checkpoints: Arc<CheckpointStore>,
@@ -602,7 +619,7 @@ impl EnterpriseAgent {
                 .await?;
             }
         }
-        let subagent_provider = crate::subagent_runtime::provider(crate::SubAgentRuntime::new(
+        let subagent_provider = crate::subagent_runtime::provider(crate::subagent_runtime::SubAgentRuntime::new(
             models.clone(),
             tools.clone(),
             config.model.profile.clone(),
@@ -882,6 +899,34 @@ impl EnterpriseAgent {
             governance,
             ecosystem,
             protocols,
+            question: Arc::new(QuestionManager::new()),
+            todo: Arc::new(TodoManager::new()),
+            reflection: Arc::new(ReflectionManager::new()),
+            subagents: {
+                let store = Arc::new(
+                    core_agent_subagent::SqliteSubAgentStore::new(config.data_dir.join("p2_subagent.db"))
+                        .map_err(runtime_error)?,
+                );
+                Arc::new(core_agent_subagent::SubAgentManager::builder().store(store).build())
+            },
+            messages: {
+                let store = Arc::new(
+                    core_agent_message::SqliteMessageStore::new(config.data_dir.join("p2_message.db"))
+                        .map_err(runtime_error)?,
+                );
+                Arc::new(core_agent_message::MessageManager::builder().store(store).build())
+            },
+            orchestrator: {
+                let store = Arc::new(
+                    core_agent_orchestrator::SqliteOrchestrationStore::new(config.data_dir.join("p2_orchestration.db"))
+                        .map_err(runtime_error)?,
+                );
+                Arc::new(
+                    core_agent_orchestrator::OrchestratorManager::builder()
+                        .store(store)
+                        .build(),
+                )
+            },
         };
         let permission_mode = config.permission_mode;
         let trace_store = Arc::new(
@@ -889,6 +934,7 @@ impl EnterpriseAgent {
                 .map_err(|error| EnterpriseAgentError::Runtime(error))?,
         );
         let trace_collector = TraceCollector::new(trace_store.clone());
+        let (stream_tx, _) = broadcast::channel(256);
         Ok(Self {
             config,
             sessions,
@@ -900,6 +946,7 @@ impl EnterpriseAgent {
             workspaces: Arc::new(WorkspaceManager::new(workspace_store)),
             runtimes,
             events: RwLock::new(HashMap::new()),
+            stream_tx,
             operation_lock: Mutex::new(()),
             approvals,
             checkpoints,
@@ -2151,6 +2198,90 @@ impl EnterpriseAgent {
                     Err(error) => { outcome.response = format!("Command failed: {error}"); }
                 }
             }
+            "subagent" => {
+                let sub = &invocation.arguments;
+                let cmd_ctx = crate::slash::CommandContext {
+                    line: line.to_string(),
+                    args: invocation.arguments.clone(),
+                    workspace: ".".to_string(),
+                    session_id: session_id.map(|id| id.to_string()),
+                    data: Default::default(),
+                };
+                let response = if sub.first().map(String::as_str) == Some("list") {
+                    let cmd = crate::slash::commands::subagent_list::SubAgentListCommand::new(
+                        self.runtimes.subagents.clone(),
+                    );
+                    cmd.execute(cmd_ctx).await
+                } else if sub.first().map(String::as_str) == Some("spawn") {
+                    let cmd = crate::slash::commands::subagent_spawn::SubAgentSpawnCommand::new(
+                        self.runtimes.subagents.clone(),
+                    );
+                    cmd.execute(cmd_ctx).await
+                } else if sub.first().map(String::as_str) == Some("status") {
+                    let cmd = crate::slash::commands::subagent_status::SubAgentStatusCommand::new(
+                        self.runtimes.subagents.clone(),
+                    );
+                    cmd.execute(cmd_ctx).await
+                } else if sub.first().map(String::as_str) == Some("destroy") {
+                    let cmd = crate::slash::commands::subagent_destroy::SubAgentDestroyCommand::new(
+                        self.runtimes.subagents.clone(),
+                    );
+                    cmd.execute(cmd_ctx).await
+                } else {
+                    Err(crate::slash::SlashError::InvalidArgument(
+                        "usage: /subagent <list|spawn|status|destroy> ...".into(),
+                    ))
+                };
+                match response {
+                    Ok(output) => { outcome.response = output.response; }
+                    Err(error) => { outcome.response = format!("Command failed: {error}"); }
+                }
+            }
+            "orchestrate" => {
+                let cmd = crate::slash::commands::orchestrate::OrchestrateCommand::new(
+                    self.runtimes.orchestrator.clone(),
+                );
+                let ctx = crate::slash::CommandContext {
+                    line: line.to_string(),
+                    args: invocation.arguments.clone(),
+                    workspace: ".".to_string(),
+                    session_id: session_id.map(|id| id.to_string()),
+                    data: Default::default(),
+                };
+                match cmd.execute(ctx).await {
+                    Ok(output) => { outcome.response = output.response; }
+                    Err(error) => { outcome.response = format!("Command failed: {error}"); }
+                }
+            }
+            "message" => {
+                let sub = &invocation.arguments;
+                let cmd_ctx = crate::slash::CommandContext {
+                    line: line.to_string(),
+                    args: invocation.arguments.clone(),
+                    workspace: ".".to_string(),
+                    session_id: session_id.map(|id| id.to_string()),
+                    data: Default::default(),
+                };
+                let response = if sub.first().map(String::as_str) == Some("send") {
+                    let cmd = crate::slash::commands::message_send::MessageSendCommand::new(
+                        self.runtimes.messages.clone(),
+                    );
+                    cmd.execute(cmd_ctx).await
+                } else if sub.first().map(String::as_str) == Some("inbox") {
+                    let cmd = crate::slash::commands::message_inbox::MessageInboxCommand::new(
+                        self.runtimes.messages.clone(),
+                    );
+                    cmd.execute(cmd_ctx).await
+                } else {
+                    Err(crate::slash::SlashError::InvalidArgument(
+                        "usage: /message <send|inbox> ...".into(),
+                    ))
+                };
+                match response {
+                    Ok(output) => { outcome.response = output.response; }
+                    Err(error) => { outcome.response = format!("Command failed: {error}"); }
+                }
+            }
             _ => {
                 return Err(EnterpriseAgentError::InvalidArgument(format!(
                     "unsupported zero-model command /{}",
@@ -2476,50 +2607,83 @@ impl EnterpriseAgent {
         request.tools = model_tool_definitions(&exposed_definitions)?;
         let mut response_text = None;
         let mut tool_call_count = 0_usize;
+        let use_stream = self.config.stream_enabled;
         for turn in 0..8_u8 {
             let model_started = Instant::now();
-            let response_result = self.models.generate(request.clone()).await;
-            timings.model_duration_ms = timings
-                .model_duration_ms
-                .saturating_add(elapsed_ms(model_started));
-            let response = match response_result {
-                Ok(response) => response,
-                Err(error) => {
-                    let error = model_error(error);
-                    self.record_failure(session_id, &mut events, &error).await;
-                    return Err(error);
+            if use_stream {
+                // ── Streaming path: consume token deltas and tool call deltas in real time ──
+                let mut stream = match self.models.stream(request.clone()).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        let error = model_error(e);
+                        self.record_failure(session_id, &mut events, &error).await;
+                        return Err(error);
+                    }
+                };
+                let mut acc = String::new();
+                let mut deltas: BTreeMap<usize, (String, String, String)> = BTreeMap::new();
+                let mut final_resp: Option<ModelResponse> = None;
+                use futures_util::StreamExt;
+                while let Some(ev) = stream.next().await {
+                    match ev {
+                        Ok(ModelStreamEvent::Started { provider, model, profile, .. }) => {
+                            let e = EnterpriseAgentEvent {
+                                kind: "model_started".into(),
+                                message: format!("Model {} via {} ({})", model, provider, profile),
+                                data: json!({"turn": turn + 1, "provider": provider, "model": model, "profile": profile}),
+                            };
+                            self.emit_event(session_id, e.clone());
+                            events.push(e);
+                        }
+                        Ok(ModelStreamEvent::Delta { content }) => {
+                            acc.push_str(&content);
+                            self.emit_event(session_id, EnterpriseAgentEvent {
+                                kind: "token_delta".into(),
+                                message: content.clone(),
+                                data: json!({"turn": turn + 1, "chunk": content}),
+                            });
+                        }
+                        Ok(ModelStreamEvent::ToolCallDelta(d)) => {
+                            let d_id = d.id.clone();
+                            let d_name = d.name.clone();
+                            let d_args = d.arguments_delta.clone();
+                            let e = deltas.entry(d.index).or_insert_with(|| (d_id.unwrap_or_default(), String::new(), String::new()));
+                            if let Some(n) = d_name { e.1 = n; }
+                            e.2.push_str(&d_args);
+                        }
+                        Ok(ModelStreamEvent::Usage(u)) => {
+                            let e = EnterpriseAgentEvent {
+                                kind: "model_usage".into(),
+                                message: format!("tokens {} in / {} out", u.prompt_tokens, u.completion_tokens),
+                                data: json!({"inputTokens": u.prompt_tokens, "outputTokens": u.completion_tokens}),
+                            };
+                            self.emit_event(session_id, e.clone());
+                            events.push(e);
+                        }
+                        Ok(ModelStreamEvent::Completed(r)) => { final_resp = Some(r); break; }
+                        Err(e) => {
+                            let error = model_error(e);
+                            self.record_failure(session_id, &mut events, &error).await;
+                            return Err(error);
+                        }
+                    }
                 }
-            };
-            events.push(EnterpriseAgentEvent {
-                kind: "model_completed".into(),
-                message: "Model inference completed".into(),
-                data: json!({
-                    "turn": turn + 1,
-                    "provider": response.provider,
-                    "model": response.model,
-                    "profile": response.profile,
-                    "usage": response.usage,
-                    "toolCalls": response.tool_calls.len(),
-                }),
-            });
-            if response.tool_calls.is_empty() {
-                response_text = Some(response.text());
-                break;
-            }
-
-            request.messages.push(ModelMessage::assistant_tool_calls(
-                response.text(),
-                response
-                    .tool_calls
-                    .iter()
-                    .map(|call| ModelToolCall {
-                        id: call.id.clone(),
-                        name: call.name.clone(),
-                        arguments: call.arguments.clone(),
-                    })
-                    .collect(),
-            ));
-            for call in &response.tool_calls {
+                timings.model_duration_ms = timings.model_duration_ms.saturating_add(elapsed_ms(model_started));
+                let response = final_resp.ok_or_else(|| EnterpriseAgentError::Model("stream ended without Completed".into()))?;
+                let mut tool_calls: Vec<ModelToolCall> = Vec::new();
+                for (_, (id, name, args)) in deltas.iter() {
+                    tool_calls.push(ModelToolCall {
+                        id: id.clone(), name: name.clone(),
+                        arguments: serde_json::from_str(args).unwrap_or_else(|_| json!({"raw": args})),
+                    });
+                }
+                events.push(EnterpriseAgentEvent {
+                    kind: "model_completed".into(), message: "Model inference completed (streaming)".into(),
+                    data: json!({"turn": turn + 1, "provider": response.provider, "model": response.model, "profile": response.profile, "usage": response.usage, "toolCalls": tool_calls.len()}),
+                });
+                if tool_calls.is_empty() { response_text = Some(acc); break; }
+                request.messages.push(ModelMessage::assistant_tool_calls(acc, tool_calls.iter().map(|c| ModelToolCall { id: c.id.clone(), name: c.name.clone(), arguments: c.arguments.clone() }).collect()));
+                for call in &tool_calls {
                 let definition = resolve_tool_definition(&definitions, &call.name)?;
                 if read_only
                     && (!tool_allowed_in_read_only(definition)
@@ -2702,11 +2866,217 @@ impl EnterpriseAgent {
                     content,
                 ));
                 tool_call_count += 1;
-            }
-            request.created_at = chrono::Utc::now();
-        }
-
-        let response_text = response_text.ok_or_else(|| {
+            } // end for call in &tool_calls
+            } else {
+                // ── Non-streaming (batch) path ──
+                let response_result = self.models.generate(request.clone()).await;
+                timings.model_duration_ms = timings.model_duration_ms.saturating_add(elapsed_ms(model_started));
+                let response = match response_result {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let error = model_error(e);
+                        self.record_failure(session_id, &mut events, &error).await;
+                        return Err(error);
+                    }
+                };
+                events.push(EnterpriseAgentEvent {
+                    kind: "model_completed".into(),
+                    message: "Model inference completed".into(),
+                    data: json!({"turn": turn + 1, "provider": response.provider, "model": response.model, "profile": response.profile, "usage": response.usage, "toolCalls": response.tool_calls.len()}),
+                });
+                if response.tool_calls.is_empty() {
+                    response_text = Some(response.text());
+                    break;
+                }
+                request.messages.push(ModelMessage::assistant_tool_calls(response.text(), response.tool_calls.iter().map(|call| ModelToolCall { id: call.id.clone(), name: call.name.clone(), arguments: call.arguments.clone() }).collect()));
+                for call in &response.tool_calls {
+	                let definition = resolve_tool_definition(&definitions, &call.name)?;
+	                if read_only
+	                    && (!tool_allowed_in_read_only(definition)
+	                        || (definition.category == "process.execute"
+	                            && !safe_command(&call.arguments)))
+	                {
+	                    let error = EnterpriseAgentError::Tool(format!(
+	                        "tool {} is denied by the read-only command boundary",
+	                        definition.name
+	                    ));
+	                    self.record_failure(session_id, &mut events, &error).await;
+	                    return Err(error);
+	                }
+	                let mut tool_request =
+	                    ToolRequest::new(definition.key.clone(), call.arguments.clone());
+	                tool_request.session_id = Some(session_id);
+	                tool_request.subject = Some("local-user".into());
+	                let permission =
+	                    tool_permission_requirement(permission_mode, definition, &call.arguments);
+	                if permission == PermissionDecision::Deny {
+	                    let error = EnterpriseAgentError::Tool(format!(
+	                        "tool {} is denied by the active permission policy",
+	                        definition.name
+	                    ));
+	                    self.record_failure(session_id, &mut events, &error).await;
+	                    return Err(error);
+	                }
+	                if permission == PermissionDecision::Ask {
+	                    let approval = EnterpriseApprovalRequest {
+	                        id: tool_request.id,
+	                        session_id,
+	                        tool: definition.name.clone(),
+	                        risk: tool_risk(definition, &call.arguments).into(),
+	                        reason: format!(
+	                            "{} mode requires approval for {}",
+	                            permission_mode_name(permission_mode),
+	                            definition.category
+	                        ),
+	                        parameters: call.arguments.clone(),
+	                    };
+	                    events.push(EnterpriseAgentEvent {
+	                        kind: "approval_required".into(),
+	                        message: format!("Approval required for {}", definition.name),
+	                        data: serde_json::to_value(&approval)?,
+	                    });
+	                    let approval_started = Instant::now();
+	                    let decision = approval_handler.decide(&approval).await;
+	                    timings.approval_wait_ms = timings
+	                        .approval_wait_ms
+	                        .saturating_add(elapsed_ms(approval_started));
+	                    events.push(EnterpriseAgentEvent {
+	                        kind: "approval_decided".into(),
+	                        message: format!("Approval {:?} for {}", decision, definition.name),
+	                        data: json!({"approvalId": approval.id, "decision": decision}),
+	                    });
+	                    if decision != EnterpriseApprovalDecision::AllowOnce {
+	                        let error = EnterpriseAgentError::Tool(format!(
+	                            "approval denied for {}",
+	                            definition.name
+	                        ));
+	                        self.record_failure(session_id, &mut events, &error).await;
+	                        return Err(error);
+	                    }
+	                }
+	                if let Some(hooks) = &self.hooks {
+	                    let hook_result = hooks
+	                        .run(
+	                            crate::HookInvocation {
+	                                event: crate::HookEvent::BeforeTool,
+	                                session_id: Some(session_id),
+	                                tool: Some(definition.name.clone()),
+	                                payload: json!({
+	                                    "requestId": request_id,
+	                                    "toolRequestId": tool_request.id,
+	                                    "parameters": call.arguments,
+	                                }),
+	                            },
+	                            tokio_util::sync::CancellationToken::new(),
+	                        )
+	                        .await;
+	                    match hook_result {
+	                        Ok(results) => {
+	                            append_hook_events(&mut events, crate::HookEvent::BeforeTool, &results)
+	                        }
+	                        Err(error) => {
+	                            let error = EnterpriseAgentError::Runtime(error.to_string());
+	                            self.record_failure(session_id, &mut events, &error).await;
+	                            return Err(error);
+	                        }
+	                    }
+	                }
+	                if definition.default_permission == PermissionDecision::Ask {
+	                    self.approvals.approve(tool_request.id)?;
+	                }
+	                let tool_started = Instant::now();
+	                let tool_result = self.tools.execute(tool_request).await;
+	                timings.tool_duration_ms = timings
+	                    .tool_duration_ms
+	                    .saturating_add(elapsed_ms(tool_started));
+	                let result = match tool_result {
+	                    Ok(result) => result,
+	                    Err(error) => {
+	                        let error = tool_error(error);
+	                        self.record_failure(session_id, &mut events, &error).await;
+	                        return Err(error);
+	                    }
+	                };
+	                if result.status != ToolLifecycleStatus::Success {
+	                    let message = result
+	                        .error
+	                        .as_ref()
+	                        .map(|error| format!("{}: {}", error.kind, error.message))
+	                        .unwrap_or_else(|| "tool execution did not succeed".into());
+	                    let error = EnterpriseAgentError::Tool(format!(
+	                        "{} ended in {}: {message}",
+	                        result.tool_key,
+	                        result.status.as_str()
+	                    ));
+	                    self.record_failure(session_id, &mut events, &error).await;
+	                    return Err(error);
+	                }
+	                if let Some(hooks) = &self.hooks {
+	                    let hook_result = hooks
+	                        .run(
+	                            crate::HookInvocation {
+	                                event: crate::HookEvent::AfterTool,
+	                                session_id: Some(session_id),
+	                                tool: Some(definition.name.clone()),
+	                                payload: json!({
+	                                    "requestId": request_id,
+	                                    "toolRequestId": result.request_id,
+	                                    "status": result.status,
+	                                    "durationMs": result.usage.duration_ms,
+	                                    "outputBytes": result.usage.output_bytes,
+	                                }),
+	                            },
+	                            tokio_util::sync::CancellationToken::new(),
+	                        )
+	                        .await;
+	                    match hook_result {
+	                        Ok(results) => {
+	                            append_hook_events(&mut events, crate::HookEvent::AfterTool, &results)
+	                        }
+	                        Err(error) => {
+	                            let error = EnterpriseAgentError::Runtime(error.to_string());
+	                            self.record_failure(session_id, &mut events, &error).await;
+	                            return Err(error);
+	                        }
+	                    }
+	                }
+	                // Check if this tool result signals user input is required (ask.user/ask.select/ask.confirm)
+	                if result.metadata.get("user_input_required").map(|v| v.as_str()) == Some("true") {
+	                    let question = result.metadata.get("question").cloned().unwrap_or_default();
+	                    events.push(EnterpriseAgentEvent {
+	                        kind: "user_input_required".into(),
+	                        message: question.clone(),
+	                        data: json!({"question": question, "tool": call.name}),
+	                    });
+	                    response_text = Some(format!(
+	                        "\n\n[Agent needs your input]\n{question}\n\nPlease respond to continue."
+	                    ));
+	                    break;
+	                }
+	                let content = serde_json::to_string(&result)?;
+	                if let Err(error) = self
+	                    .append_completed_message(&conversation.id, "TOOL", &content)
+	                    .await
+	                {
+	                    self.record_failure(session_id, &mut events, &error).await;
+	                    return Err(error);
+	                }
+	                events.push(EnterpriseAgentEvent {
+	                    kind: "tool_completed".into(),
+	                    message: format!("Tool {} completed", call.name),
+	                    data: serde_json::to_value(&result)?,
+	                });
+	                request.messages.push(ModelMessage::tool_result(
+	                    call.id.clone(),
+	                    call.name.clone(),
+	                    content,
+	                ));
+	                tool_call_count += 1;
+	            } // end for call in &response.tool_calls
+	            } // end if streaming/else
+	            request.created_at = chrono::Utc::now();
+	        } // end for turn
+	        let response_text = response_text.ok_or_else(|| {
             EnterpriseAgentError::Model("model exceeded the 8-turn tool-call limit".into())
         })?;
         if response_text.trim().is_empty() {
@@ -2815,6 +3185,17 @@ impl EnterpriseAgent {
             active_duration_ms: 0,
             telemetry_recorded: false,
         })
+    }
+
+    /// Subscribe to real-time Agent events via a broadcast channel.
+    /// Returns a receiver that yields events as they are produced during execution.
+    pub fn subscribe_events(&self) -> broadcast::Receiver<EnterpriseAgentEvent> {
+        self.stream_tx.subscribe()
+    }
+
+    /// Emit an event to both the stored event log and the real-time broadcast channel.
+    fn emit_event(&self, session_id: Uuid, event: EnterpriseAgentEvent) {
+        let _ = self.stream_tx.send(event);
     }
 
     pub async fn events(&self, session_id: Uuid) -> Vec<EnterpriseAgentEvent> {

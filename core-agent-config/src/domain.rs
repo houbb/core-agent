@@ -231,6 +231,8 @@ pub struct ConfigModel {
     pub api_key: Option<String>,
     #[serde(default, alias = "api_key_ref")]
     pub api_key_ref: Option<String>,
+    #[serde(default = "default_stream")]
+    pub stream: bool,
 }
 
 impl Default for ConfigModel {
@@ -243,6 +245,7 @@ impl Default for ConfigModel {
             max_context_tokens: DEFAULT_MAX_CONTEXT_TOKENS,
             api_key: None,
             api_key_ref: None,
+            stream: true,
         }
     }
 }
@@ -253,6 +256,10 @@ fn default_model_provider() -> String {
 
 fn default_max_context_tokens() -> u64 {
     DEFAULT_MAX_CONTEXT_TOKENS
+}
+
+fn default_stream() -> bool {
+    true
 }
 
 impl ConfigModel {
@@ -465,6 +472,7 @@ pub struct ConfigModelPatch {
     pub api_key_ref: Option<String>,
     #[serde(alias = "api_key_env")]
     pub api_key_env: Option<String>,
+    pub stream: Option<bool>,
 }
 
 impl ConfigModelPatch {
@@ -495,6 +503,9 @@ impl ConfigModelPatch {
         if let Some(value) = self.api_key_env {
             target.api_key_ref = Some(format!("env:{value}"));
             target.api_key = None;
+        }
+        if let Some(value) = self.stream {
+            target.stream = value;
         }
     }
 }

@@ -407,6 +407,43 @@ impl PlanReviewer for StructuralPlanReviewer {
     }
 }
 
+/// LLM-driven plan builder.
+///
+/// Accepts a PlanDraft (generated externally by an LLM) and validates it.
+/// The LLM is expected to produce JSON matching the PlanDraft schema.
+pub struct LLMPlanBuilder {
+    pub draft: PlanDraft,
+}
+
+impl LLMPlanBuilder {
+    pub fn new(draft: PlanDraft) -> Self {
+        Self { draft }
+    }
+
+    /// Build from a JSON string (LLM output).
+    pub fn from_json(json_str: &str) -> PlanResult<Self> {
+        let draft: PlanDraft = serde_json::from_str(json_str)
+            .map_err(|e| PlanError::Validation(format!("LLM PlanDraft JSON parse error: {e}")))?;
+        if draft.tasks.is_empty() {
+            return Err(PlanError::Validation(
+                "LLM PlanDraft must contain at least 1 task".into(),
+            ));
+        }
+        Ok(Self { draft })
+    }
+}
+
+#[async_trait]
+impl PlanBuilder for LLMPlanBuilder {
+    fn key(&self) -> &str {
+        "llm"
+    }
+
+    async fn build(&self, _goal: &Goal, _context: &PlanningContext) -> PlanResult<PlanDraft> {
+        Ok(self.draft.clone())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

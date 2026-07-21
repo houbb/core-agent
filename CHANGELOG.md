@@ -1,5 +1,132 @@
 # CHANGELOG
 
+## [0.41.2] - 2026-07-21
+
+### P043 Multi-Agent Runtime — Multi-Agent 协同系统
+
+实现 `design-docs/043-core-ablity-p2-multi-agent.md` 定义的 P2 Multi-Agent Runtime，让 Agent 从 Single Agent 升级为 Agent System。
+
+#### 新 crate：core-agent-subagent
+
+- **AgentInstance** — 完整的 SubAgent 生命周期模型：Created → Initialized → Running → Waiting → Completed/Failed → Destroyed
+- **AgentRole** — 6 种角色：Planner、Executor、Researcher、Reviewer、Monitor、DecisionMaker
+- **InstanceType** — Manager / Worker 实例类型 + parent/supervisor 关系链
+- **SubAgentManager** — 创建/启动/停止/销毁/查询/按条件过滤
+- **SubAgentLifecycle** — 严格的状态转换机（不允许非法跳转）
+- **SubAgentObserver/Interceptor** — 生命周期事件监听和拦截
+- **SQLite 持久化** — agent_instance 表 + 3 个索引 + 乐观并发控制
+
+#### 新 crate：core-agent-message
+
+- **AgentMessage** — 结构化消息：Request/Response/Event/Broadcast 4 种类型
+- **消息字段** — from/to_agent_id、correlation_id（对话链）、intent（结构化意图）、payload
+- **MessagePriority** — 4 级优先级：Low/Normal/High/Critical
+- **MessageStatus** — 完整的生命周期：Pending → Delivered → Read / Failed
+- **MessageManager** — send/receive/broadcast/reply_to/mark_read/list_inbox
+- **Mailbox 模式** — 每个 Agent 独立收件箱，按优先级和创建时间排序
+- **DefaultMessageBus** — send 持久化 + receive 拉取 + broadcast 批量发送
+- **SQLite 持久化** — agent_message 表 + 4 个索引
+
+#### 新 crate：core-agent-orchestrator
+
+- **Orchestration** — 编排任务模型（goal/strategy/status/workers/result）
+- **4 种策略** — Sequential（串行）、Parallel（并行）、Supervisor（监管者模式）、Debate（辩论模式）
+- **SupervisorStrategy** — MVP 策略：Supervisor 创建 Worker → 发送任务消息 → Worker 执行 → 聚合结果
+- **DefaultResultAggregator** — 多结果合并 + 置信度计算
+- **OrchestratorManager** — create/start/add_worker/get_result/supervise 完整 API
+- **AgentInstanceRef/WorkerResult/AggregatedResult** — 编排结果数据模型
+- **SQLite 持久化** — orchestration 表 + 2 个索引
+
+#### 新增 Slash 命令（8 个）
+
+| 命令 | 用法 | 功能 |
+|------|------|------|
+| `/subagent list` | `/subagent list` | 列出所有子 Agent 实例（名称/角色/状态/ID/父子关系） |
+| `/subagent spawn` | `/subagent spawn <role> <task>` | 创建子 Agent 实例（role: planner/executor/researcher/reviewer/monitor/decisionmaker） |
+| `/subagent status` | `/subagent status <id>` | 查看子 Agent 完整状态信息 |
+| `/subagent destroy` | `/subagent destroy <id>` | 销毁指定子 Agent |
+| `/orchestrate` | `/orchestrate <strategy> <goal>` | 启动多 Agent 编排任务（支持 sequential/parallel/supervisor/debate） |
+| `/orchestrate status` | `/orchestrate status <id>` | 查看编排任务状态和结果 |
+| `/message send` | `/message send <to> <text>` | 向 Agent 发送消息 |
+| `/message inbox` | `/message inbox [agent_id]` | 查看消息收件箱 |
+
+#### RCA Demo
+
+`/orchestrate supervisor "订单服务 500"` 端到端 RCA 链路：
+1. Supervisor Agent 自动创建 3 个 Researcher SubAgent（Log-Agent、Metric-Agent、Trace-Agent）
+2. Supervisor 通过 MessageManager 向每个 Worker 发送 TASK_ASSIGNMENT 消息
+3. Worker 并行执行分析任务
+4. DefaultResultAggregator 聚合结果，输出 Root Cause 和置信度
+
+#### 集成
+
+- 3 个新 crate 注册到 Workspace members
+- EnterpriseRuntimes 新增 `subagents`、`messages`、`orchestrator` 三个字段
+- EnterpriseAgent 初始化时创建 3 个 SQLite 持久化 store（p2_subagent.db / p2_message.db / p2_orchestration.db）
+- lib.rs 新增 re-export 块
+- P2CommandPlugin 插件模式注册（复用 society_plugin.rs 的 enum-wrapper 模式）
+
+#### 测试
+
+- **core-agent-subagent**: 15 tests（7 unit + 8 e2e）
+- **core-agent-message**: 13 tests（6 unit + 7 e2e）
+- **core-agent-orchestrator**: 12 tests（3 unit + 9 e2e）
+- **总计**: 40 tests ✅
+
+## [0.40.2] - 2026-07-21
+
+### P042 Intelligence Runtime — 从 Reactive 升级为 Proactive Agent
+
+实现 `design-docs/042-core-ablity-p1-plan.md` 定义的 P1 Intelligence Runtime，让 Agent 从"响应式"升级为"规划式"。
+
+#### 🔴 新 crate：core-agent-question (P1)
+
+- **Question 模型** — 支持 CHOICE/CONFIRM/INPUT/APPROVAL/REVIEW 五种类型
+- **QuestionManager** — 基于 oneshot channel 的异步 ask/answer 模式
+- **QuestionOption** — 选项列表，支持默认值标记
+- **Question 校验** — 类型/选项/内容长度严格校验
+
+#### 🔴 新 crate：core-agent-todo (P1)
+
+- **Todo 模型** — 用户可见进度项，PENDING/IN_PROGRESS/COMPLETED/CANCELLED 状态
+- **TodoManager** — 增删改查、批量创建、按 session 分组
+- **TodoList** — 排序、完成计数、进度统计
+- **同步机制** — `sync_from_step()` 支持与执行步骤状态同步
+
+#### 🔴 新 crate：core-agent-reflection (P1)
+
+- **Reflection 模型** — 评分 0-100、issues、suggestions、criteria
+- **ReflectionManager** — 规则评估器（MVP），支持存储/查询
+- **阈值检查** — `passes_threshold()` 判断是否达标
+- **Retry 控制** — `can_retry()` 限制最大重试次数
+
+#### 🟡 LLMPlanBuilder 增强 (P1)
+
+- **LLMPlanBuilder** — 新增 `core-agent-plan` 的 PlanBuilder 实现，key="llm"
+- **from_json()** — 从 LLM 生成的 PlanDraft JSON 解析并校验
+- **复用现有 validate()** — 生成后通过 Plan::validate() 校验结构完整性
+
+#### 🟡 集成到 EnterpriseAgent (P1)
+
+- **EnterpriseRuntimes** — 新增 question/todo/reflection 三个字段
+- **with_model_and_telemetry()** — 初始化三个新 Runtime
+- **CLI 渲染器** — 支持 `todo_list` 和 `reflection_completed` 事件格式化展示
+
+#### 🛠 架构变更
+
+- **3 个新 crate** — `core-agent-question`、`core-agent-todo`、`core-agent-reflection`
+- **1 个增强 crate** — `core-agent-plan` 新增 `LLMPlanBuilder`
+- **Cargo.toml** — workspace members 和 dependencies 新增三个 crate
+- **模块复用** — Planner 复用 core-agent-plan 的 PlanBuilder/PlanDraft；Task 复用 core-agent-execution 的 ExecutionManager
+
+#### ✅ 验证
+
+- `cargo test -p core-agent-question` — 3 个测试全部通过
+- `cargo test -p core-agent-todo` — 3 个测试全部通过
+- `cargo test -p core-agent-reflection` — 4 个测试全部通过
+- `cargo test -p core-agent-plan` — 11+10 个测试全部通过
+- 新增 `tests/p1_intelligence_e2e.rs` — 4 个 E2E 测试覆盖完整 P1 流程
+
 ## [0.40.0] - 2026-07-21
 
 ### P040 Plan + Ask 模块澄清补全 — 对标 Claude Code Plan Mode
