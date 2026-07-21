@@ -1277,3 +1277,8 @@ core-agent-cost
 也就是：
 
 **Agent Enterprise Governance Runtime（企业治理层）**。
+
+
+# 注意
+
+另外，做一个全面的增强。参考 skills 渐进式披露的核心思想，让 mcp/skills/tools/slash 都符合这种渐进式披露的思想。然后再   / slash 唤醒的时候，对应 3 个 分组，默认第一个事 slash，其她几个一次做好分组。  另外，你对比一下 tools slash，让我彻底理解二者的区别

@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use core_agent::{
     ContextCandidateIndex, EnterpriseApprovalDecision, EnterpriseApprovalHandler,
-    EnterpriseApprovalRequest, InteractionCommandRegistry,
+    EnterpriseApprovalRequest, SlashCommandRegistry,
 };
 use crossterm::cursor::{Hide, Show};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
@@ -181,25 +181,52 @@ impl TuiState {
         self.suggestions =
             if self.input.starts_with('/') && !self.input.contains(char::is_whitespace) {
                 let prefix = self.input.trim_start_matches('/');
-                InteractionCommandRegistry::with_builtins()
-                    .help()
-                    .into_iter()
-                    .filter(|command| command.name.starts_with(prefix))
-                    .take(8)
-                    .map(|command| Suggestion {
-                        replacement: format!(
-                            "/{}{}",
-                            command.name,
-                            if command.maximum_arguments > 0 {
-                                " "
-                            } else {
-                                ""
-                            }
-                        ),
-                        label: command.usage,
-                        detail: command.summary,
-                    })
-                    .collect()
+                let registry = SlashCommandRegistry::with_builtins();
+                let mut suggestions: Vec<Suggestion> = Vec::new();
+
+                // Group 1: Slash commands — show usage + category
+                if prefix.is_empty() || !prefix.starts_with("tool:") && !prefix.starts_with("skill:") {
+                    for cmd in registry.help().iter().take(6) {
+                        if cmd.name.starts_with(prefix) {
+                            suggestions.push(Suggestion {
+                                replacement: format!(
+                                    "/{}{}",
+                                    cmd.name,
+                                    if cmd.max_args > 0 { " " } else { "" }
+                                ),
+                                label: cmd.usage.clone(),
+                                detail: format!("[{}] {}", cmd.category.as_str(), cmd.description),
+                            });
+                        }
+                    }
+                }
+
+                // Group 2: Tool shortcuts
+                if prefix.is_empty() || "tool".starts_with(prefix) || prefix.starts_with("tool:") {
+                    let tool_prefix = prefix.strip_prefix("tool:").unwrap_or("");
+                    if tool_prefix.is_empty() {
+                        suggestions.push(Suggestion {
+                            replacement: "/tool:".into(),
+                            label: "/tool:".into(),
+                            detail: "Access available tools".into(),
+                        });
+                    }
+                }
+
+                // Group 3: Skill shortcuts
+                if prefix.is_empty() || "skill".starts_with(prefix) || prefix.starts_with("skill:") {
+                    let skill_prefix = prefix.strip_prefix("skill:").unwrap_or("");
+                    if skill_prefix.is_empty() {
+                        suggestions.push(Suggestion {
+                            replacement: "/skill:".into(),
+                            label: "/skill:".into(),
+                            detail: "Access available skills".into(),
+                        });
+                    }
+                }
+
+                suggestions.truncate(8);
+                suggestions
             } else if let Some((_, prefix)) = mention_at_cursor(&self.input, self.cursor) {
                 let search = self.context_index.search(prefix, MAX_MATCHED_FILES);
                 if !search.query_ready {

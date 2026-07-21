@@ -1,6 +1,41 @@
 # CHANGELOG
 
-## [0.41.2] - 2026-07-21
+## [0.42.0] - 2026-07-21
+
+### P042 Extension Ecosystem — Agent 能力扩展层
+
+实现 `design-docs/042-core-ablity-p3-extensition.md` 定义的 P3 Extension Ecosystem Runtime，让 Agent 具备标准化扩展能力。
+
+#### 新 crate：core-agent-mcp
+
+- **McpClient** — stdio-based JSON-RPC 传输层，支持 MCP 协议 `2025-06-18`
+- **McpToolProvider** — 实现 `ToolProvider` trait，将 MCP Server 的远程工具包装为本地 `Tool`
+- **McpServerConfig** — 分层配置发现（global + project），支持 32 台服务器
+- **安全控制** — 环境变量过滤（自动屏蔽敏感信息）、配置校验、超时/取消支持
+- **分页发现** — 通过 `tools/list` 自动发现远程工具，支持游标分页
+
+#### 新 crate：core-agent-plugin
+
+- **PluginManifest** — YAML/JSON 格式的插件清单（name/version/author/tools/skills/agents）
+- **PluginLifecycle** — 完整生命周期：Install → Enable → Disable → Uninstall
+- **PluginManager** — 基于 `core-agent-extension` 实现，将插件注册为 Extension
+- **插件隔离** — 状态转换验证 + 乐观并发控制
+
+#### 新 crate：core-agent-skill
+
+- **SkillCatalog** — 从文件系统发现 Skill（SKILL.md + YAML frontmatter）
+- **SkillDescriptor** — 技能元数据（name/description/scope/tool_count）
+- **SkillRoot** — 分层技能根目录，支持 precedence 覆盖（system → user → project）
+- **懒加载** — 只加载元数据，完整内容按需加载（`load()`）
+- **metadata_prompt** — 渐进式披露，按预算裁剪技能描述
+
+#### 新 crate：core-agent-slash
+
+- **SlashCommandRegistry** — 独立的 slash 命令注册表，支持 CLI/TUI/Desktop/Web/API
+- **SlashCommand trait** — 统一的命令接口（metadata → validate → execute）
+- **SlashCommandObserver** — 命令生命周期观察者（start/success/failure）
+- **tokenize 解析器** — 支持引号转义、参数拆分
+- **SlashCategory** — 14 种分类体系
 
 ### P043 Multi-Agent Runtime — Multi-Agent 协同系统
 

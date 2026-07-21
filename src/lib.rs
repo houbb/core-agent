@@ -185,7 +185,7 @@ pub use core_agent_extension::{
 };
 pub use core_agent_governance as governance_runtime;
 pub use core_agent_governance::{
-    AiAssetType, AssetApproval, AssetEnvironment, CostRecord, DataClassification, EnterpriseError,
+    AiAssetType, AssetApproval, AssetEnvironment, DataClassification, EnterpriseError,
     EnterpriseGovernanceManager, EnterprisePrincipal, EnterpriseResult, GovernanceAsset,
     GovernanceAssetState, GovernanceSnapshot, IdentityProviderKind, PrincipalState,
 };
@@ -242,6 +242,24 @@ pub use core_agent_orchestrator::{
     AggregatedResult, AgentInstanceRef, Orchestration, OrchestratorError, OrchestratorManager,
     OrchestratorManagerBuilder, OrchestratorResult, OrchestrationStatus, OrchestrationStrategy,
     OrchestrationStore, WorkerResult,
+};
+pub use core_agent_audit as audit_runtime;
+pub use core_agent_audit::{
+    AuditError, AuditEvent, AuditEventType, AuditManager, AuditManagerBuilder, AuditQuery,
+    AuditResult, AuditSeverity, AuditSnapshot, AuditStore, AuditObserver, InMemoryAuditStore,
+    SqliteAuditStore,
+};
+pub use core_agent_approval as approval_runtime;
+pub use core_agent_approval::{
+    ApprovalDecision, ApprovalError, ApprovalManager, ApprovalManagerBuilder, ApprovalRequest,
+    ApprovalResult, ApprovalState, ApprovalStore, ApprovalType, ApprovalNotifier, RiskEngine,
+    RiskLevel, RiskRule, DefaultRiskEngine, InMemoryApprovalStore,
+};
+pub use core_agent_cost as cost_runtime;
+pub use core_agent_cost::{
+    Budget, BudgetScope, BudgetState, CostControlStrategy, CostError, CostManager,
+    CostManagerBuilder, CostObserver, CostRecord, CostResult, CostStore, CostSummary,
+    DefaultCostControlStrategy, InMemoryCostStore, SqliteCostStore,
 };
 pub use core_agent_plan as planning_runtime;
 pub use core_agent_plan::{

@@ -335,18 +335,54 @@ impl SlashCommandRegistry {
         })
     }
 
-    /// 获取命令补全列表
-    pub fn complete(&self, prefix: &str) -> Vec<String> {
+    /// 获取命令补全列表（三组：Slash 命令 / Tool 快捷入口 / Skill 快捷入口）
+    ///
+    /// 输入 `/` 时显示所有分组，默认选中 Slash 命令组。
+    /// 输入 `/tool:` 或 `/skill:` 可快速切换到工具/技能组。
+    pub fn complete(&self, prefix: &str, tools: &[String], skills: &[String]) -> Vec<String> {
         let prefix = prefix.trim_start_matches('/');
-        let mut names: Vec<String> = self
+        let mut names: Vec<String> = Vec::new();
+
+        // Group 1: Slash commands (default)
+        let slash_prefix = prefix;
+        let slash_commands: Vec<String> = self
             .builtin
             .help()
             .into_iter()
             .map(|d| d.name)
             .chain(self.plugins.keys().cloned())
-            .filter(|name| name.starts_with(prefix))
+            .filter(|name| name.starts_with(slash_prefix))
             .map(|name| format!("/{name}"))
             .collect();
+        names.extend(slash_commands);
+
+        // Group 2: Tool shortcuts (prefix: /tool:)
+        if prefix.is_empty() || "tool".starts_with(prefix) || prefix.starts_with("tool:") {
+            let tool_prefix = prefix.strip_prefix("tool:").unwrap_or("");
+            for tool in tools {
+                if tool.starts_with(tool_prefix) {
+                    names.push(format!("/tool:{tool}"));
+                }
+            }
+            // When user types just "/", show the tool: prefix as a discoverable entry point
+            if prefix.is_empty() || prefix == "tool" {
+                names.push("/tool:".to_string());
+            }
+        }
+
+        // Group 3: Skill shortcuts (prefix: /skill:)
+        if prefix.is_empty() || "skill".starts_with(prefix) || prefix.starts_with("skill:") {
+            let skill_prefix = prefix.strip_prefix("skill:").unwrap_or("");
+            for skill in skills {
+                if skill.starts_with(skill_prefix) {
+                    names.push(format!("/skill:{skill}"));
+                }
+            }
+            if prefix.is_empty() || prefix == "skill" {
+                names.push("/skill:".to_string());
+            }
+        }
+
         names.sort();
         names.dedup();
         names

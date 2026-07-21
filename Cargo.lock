@@ -801,15 +801,19 @@ dependencies = [
  "chrono",
  "core-agent-agent",
  "core-agent-app",
+ "core-agent-approval",
+ "core-agent-audit",
  "core-agent-collaboration",
  "core-agent-config",
  "core-agent-context",
+ "core-agent-cost",
  "core-agent-ecosystem",
  "core-agent-event",
  "core-agent-execution",
  "core-agent-extension",
  "core-agent-governance",
  "core-agent-kernel",
+ "core-agent-mcp",
  "core-agent-memory",
  "core-agent-message",
  "core-agent-model",
@@ -817,10 +821,13 @@ dependencies = [
  "core-agent-orchestrator",
  "core-agent-plan",
  "core-agent-platform",
+ "core-agent-plugin",
  "core-agent-protocol",
  "core-agent-question",
  "core-agent-reflection",
  "core-agent-session",
+ "core-agent-skill",
+ "core-agent-slash",
  "core-agent-subagent",
  "core-agent-todo",
  "core-agent-tool",
@@ -868,6 +875,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "core-agent-approval"
+version = "0.41.2"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "core-agent-audit"
+version = "0.41.2"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "core-agent-collaboration"
 version = "0.41.2"
 dependencies = [
@@ -905,6 +944,22 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "core-agent-cost"
+version = "0.41.2"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "uuid",
@@ -996,6 +1051,23 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "core-agent-mcp"
+version = "0.41.2"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "core-agent-tool",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
  "uuid",
 ]
 
@@ -1118,6 +1190,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "core-agent-plugin"
+version = "0.41.2"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "core-agent-extension",
+ "core-agent-tool",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "core-agent-protocol"
 version = "0.41.2"
 dependencies = [
@@ -1164,6 +1254,36 @@ dependencies = [
  "r2d2",
  "r2d2_sqlite",
  "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "core-agent-skill"
+version = "0.41.2"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "core-agent-tool",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
+name = "core-agent-slash"
+version = "0.41.2"
+dependencies = [
+ "async-trait",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -5339,6 +5459,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

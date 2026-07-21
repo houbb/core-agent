@@ -190,6 +190,10 @@ impl ToolManager {
         self.catalog.list_tools().await
     }
 
+    pub async fn categories(&self) -> ToolRuntimeResult<Vec<String>> {
+        self.catalog.categories().await
+    }
+
     pub async fn find(&self, key: &str) -> ToolRuntimeResult<Option<ToolDefinition>> {
         self.catalog.find_tool(key).await
     }

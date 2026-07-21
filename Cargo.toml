@@ -31,6 +31,10 @@ members = [
     "core-agent-subagent",
     "core-agent-message",
     "core-agent-orchestrator",
+    "core-agent-slash",
+    "core-agent-skill",
+    "core-agent-plugin",
+	    "core-agent-mcp",
 ]
 
 [workspace.package]
@@ -76,6 +80,13 @@ core-agent-reflection = { path = "core-agent-reflection" }
 core-agent-subagent = { path = "core-agent-subagent" }
 core-agent-message = { path = "core-agent-message" }
 core-agent-orchestrator = { path = "core-agent-orchestrator" }
+core-agent-audit = { path = "core-agent-audit" }
+core-agent-approval = { path = "core-agent-approval" }
+core-agent-cost = { path = "core-agent-cost" }
+core-agent-mcp = { path = "core-agent-mcp" }
+core-agent-plugin = { path = "core-agent-plugin" }
+core-agent-skill = { path = "core-agent-skill" }
+core-agent-slash = { path = "core-agent-slash" }
 async-trait = "0.1"
 chrono = "0.4"
 serde = { version = "1", features = ["derive"] }

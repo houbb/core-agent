@@ -15,6 +15,9 @@ use core_agent_extension::ExtensionManager;
 use core_agent_governance::{
     EnterpriseGovernanceManager, EnterprisePrincipal, IdentityProviderKind,
 };
+use core_agent_audit::{AuditManager, SqliteAuditStore};
+use core_agent_approval::{ApprovalManager, SqliteApprovalStore};
+use core_agent_cost::{CostManager, SqliteCostStore};
 use core_agent_kernel::{ManagedRuntime, RuntimeKernel};
 use core_agent_memory::MemoryManager;
 use core_agent_model::{
@@ -365,6 +368,9 @@ pub struct EnterpriseRuntimes {
     pub subagents: Arc<core_agent_subagent::SubAgentManager>,
     pub messages: Arc<core_agent_message::MessageManager>,
     pub orchestrator: Arc<core_agent_orchestrator::OrchestratorManager>,
+    pub audit: Arc<AuditManager>,
+    pub approval: Arc<ApprovalManager>,
+    pub cost: Arc<CostManager>,
 }
 
 /// The single application composition root. Runtime crates remain modules and
@@ -926,6 +932,27 @@ impl EnterpriseAgent {
                         .store(store)
                         .build(),
                 )
+            },
+            audit: {
+                let store = Arc::new(
+                    SqliteAuditStore::new(&database_path(&config.data_dir, "audit.db")?)
+                        .map_err(|e| EnterpriseAgentError::Runtime(e.to_string()))?,
+                );
+                Arc::new(AuditManager::new(store))
+            },
+            approval: {
+                let store = Arc::new(
+                    SqliteApprovalStore::new(&database_path(&config.data_dir, "approval.db")?)
+                        .map_err(|e| EnterpriseAgentError::Runtime(e.to_string()))?,
+                );
+                Arc::new(ApprovalManager::new(store))
+            },
+            cost: {
+                let store = Arc::new(
+                    SqliteCostStore::new(&database_path(&config.data_dir, "cost.db")?)
+                        .map_err(|e| EnterpriseAgentError::Runtime(e.to_string()))?,
+                );
+                Arc::new(CostManager::new(store))
             },
         };
         let permission_mode = config.permission_mode;
