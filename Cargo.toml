@@ -35,10 +35,23 @@ members = [
     "core-agent-skill",
     "core-agent-plugin",
 	    "core-agent-mcp",
+	    "core-agent-audit",
+	    "core-agent-approval",
+	    "core-agent-cost",
+	    "core-agent-evaluation",
+	    "core-agent-learning",
+	    "core-agent-marketplace",
+	    "core-agent-network",
+	    "core-agent-autonomous",
+		    "core-agent-document",
+		    "core-agent-vector",
+		    "core-agent-rag",
+		    "core-agent-knowledge",
+		    "core-agent-semantic",
 ]
 
 [workspace.package]
-version = "0.41.2"
+version = "0.43.2"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/core-agent/core-agent"
@@ -87,6 +100,11 @@ core-agent-mcp = { path = "core-agent-mcp" }
 core-agent-plugin = { path = "core-agent-plugin" }
 core-agent-skill = { path = "core-agent-skill" }
 core-agent-slash = { path = "core-agent-slash" }
+core-agent-evaluation = { path = "core-agent-evaluation" }
+core-agent-learning = { path = "core-agent-learning" }
+core-agent-marketplace = { path = "core-agent-marketplace" }
+core-agent-network = { path = "core-agent-network" }
+core-agent-autonomous = { path = "core-agent-autonomous" }
 async-trait = "0.1"
 chrono = "0.4"
 serde = { version = "1", features = ["derive"] }

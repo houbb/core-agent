@@ -1,5 +1,109 @@
 # CHANGELOG
 
+## [0.43.2] - 2026-07-22
+
+### P046 Knowledge Intelligence Layer — Agent 知识智能层
+
+实现 `design-docs/043-core-ablity-p6-intelligence.md` 定义的 P6 Knowledge Intelligence Layer，让 Agent 拥有企业知识大脑。
+
+#### 新 crate：core-agent-document
+
+- **DocumentManager** — 文档解析管道：Upload → Parse → Clean → Split → Store
+- **DocumentParser trait** — 6 种解析器：Markdown(pulldown-cmark)、TXT、Code、PDF(pdf-extract)、DOCX、HTML(regex)
+- **DocumentAST** — 结构化文档模型（标题、章节、表格、代码块、链接）
+- **DefaultDocumentSplitter** — 按章节/段落/句子智能分块
+- **SqliteDocumentStore** — SQLite 持久化，支持 `document` + `document_chunk` 表（无外键，有审计列）
+
+#### 新 crate：core-agent-vector
+
+- **VectorManager** — 向量存储与混合搜索（Cosine + FTS5 + Metadata Filter）
+- **EmbeddingModel trait** — 可插拔嵌入模型（MVP 内置 SimpleEmbeddingModel）
+- **混合搜索公式** — `score = 0.7 * vector_similarity + 0.3 * keyword_score`
+- **SqliteVectorStore** — embedding 存 BLOB，FTS5 虚拟表自动同步
+- **SearchResult** — 返回 score + matched_by 来源标注
+
+#### 新 crate：core-agent-rag
+
+- **RagManager** — 完整 RAG 管道：Question → Retriever → Context Builder → Answer
+- **DefaultRetriever** — 包装 VectorManager，支持向量+关键词检索
+- **DefaultContextBuilder** — 直接拼接，带 `[Source: ...]` 来源标注
+- **RagPipeline trait** — 可替换的管道实现，支持 `ask()` / `ask_with_history()` / `search()`
+
+#### 新 crate：core-agent-knowledge
+
+- **KnowledgeManager** — 统一知识管理入口，5 种知识类型：Document/Code/Runtime/Business/Experience
+- **知识生命周期** — Create → Review(自动通过) → Publish → Update → Archive
+- **DefaultKnowledgeSearch** — 标题/内容/标签多维度搜索
+- **KnowledgeCategory** — 树形分类管理
+- **SqliteKnowledgeStore** — `knowledge_item` + `knowledge_category` 表
+
+#### 新 crate：core-agent-semantic
+
+- **SemanticManager** — 知识图谱：实体抽取 + 关系存储 + BFS 图查询
+- **DefaultEntityExtractor** — 从章节标题、代码块、链接中提取实体
+- **DefaultRelationExtractor** — 关键词关系检测（depends on / uses / calls / communicates with）
+- **EntityType** — 7 种类型：Service/Database/Component/Concept/Person/System/Api
+- **RelationType** — 6 种类型：DependsOn/Uses/Contains/CommunicatesWith/Implements/DeploysOn
+- **SemanticGraph** — BFS 遍历，支持 `find_related(entity_id, max_depth)`
+- **SqliteGraphStore** — `semantic_entity` + `semantic_relation` 表
+
+#### 集成
+
+- **knowledge.search 工具升级** — 从 stub 改为真实 RAG 工具，支持 `RagManager` 注入
+- 全部 5 个 crate 在 workspace 中注册，统一版本 `0.43.2`
+- 每张表遵循 DB 规范：`id` `create_time` `update_time` `create_user` `update_user`，无外键
+
+## [0.43.0] - 2026-07-22
+
+### P5 Intelligence Evolution Layer — Agent 智能进化层
+
+实现 `design-docs/043-core-ablity-p5-auto-grow.md` 定义的 P5 Intelligence Evolution Layer，让 Agent 从"人配置能力 → Agent 执行"升级为"Agent 使用经验 → 评估效果 → 学习优化 → 自主完成更多任务"。
+
+#### 新 crate：core-agent-evaluation
+
+- **EvaluationDimension** — 4 维评价体系：Correctness（正确性）、Quality（质量）、Safety（安全）、Cost（成本）
+- **Score** — 0-100 整数评分，支持加权汇总
+- **EvaluationCriteria** — 可配置的评价标准，权重之和为 1.0
+- **Evaluation** — 完整的评价记录：criteria、feedback、total_score、passed
+- **EvaluationManager** — 创建评价、记录反馈、列表查询、聚合快照
+- **SqliteEvaluationStore** — SQLite 持久化存储，append-only 不可变记录
+- **InMemoryEvaluationStore** — 内存存储，适合测试
+
+#### 新 crate：core-agent-learning
+
+- **LearningRecord** — 学习记录模型：source（Evaluation/UserFeedback/ExecutionTrace/ManualReview/SystemAnalysis）
+- **LearningType** — 5 种学习类型：Skill、Workflow、Prompt、Policy、Pattern
+- **LearningStatus** — 完整生命周期：Candidate → Reviewing → Approved → Applied / Rejected → Archived
+- **LearningManager** — 创建记录、审批（approve）、应用（apply）、拒绝（reject）、列表查询、聚合快照
+- **SqliteLearningStore** — SQLite 持久化存储
+- **Candidate → Review → Apply** 安全流程，防止自动修改核心能力
+
+#### 新 crate：core-agent-marketplace
+
+- **AssetType** — 7 种资产类型：Agent、Skill、Plugin、Workflow、Template、Prompt、MCP
+- **MarketplacePackage** — 包模型：name、version、author、rating、downloads、tags、content
+- **PackageState** — 生命周期：Draft → Published → Deprecated → Archived
+- **MarketplaceManager** — 发布（publish）、安装（install）、弃用（deprecate）、按条件搜索、聚合快照
+- **SqliteMarketplaceStore** — SQLite 持久化，支持按 key+version 唯一索引
+
+#### 新 crate：core-agent-network
+
+- **AgentRegistration** — Agent 注册模型：capabilities、status、trust_level、reputation
+- **AgentStatus** — Online / Busy / Offline 状态追踪
+- **TrustLevel** — Untrusted / Low / Medium / High 信任等级
+- **DiscoveryRequest** — 基于 capability 的 Agent 发现，支持 min_reputation 和 max_results
+- **NetworkManager** — 注册、发现（discover）、状态更新、capability 添加、聚合快照
+- **SqliteNetworkStore** — SQLite 持久化，agent_id 唯一约束
+
+#### 新 crate：core-agent-autonomous
+
+- **AutonomyLevel** — 5 级自治：L0 Suggest → L1 AutoAnalyze → L2 AutoExecuteLowRisk → L3 AutoExecuteProduction → L4 FullAutonomous
+- **AutonomousLoopState** — Observe → Analyze → Plan → Act → Evaluate → Learn 循环状态机
+- **AutonomousGoal** — 自治目标模型：description、priority（0-10）、deadline、constraints
+- **AutonomousTrigger** — Event / Schedule / Goal 三种触发方式
+- **AutonomousManager** — 创建目标、启动/暂停循环、推进循环周期、聚合快照
+- **SqliteAutonomousStore** — SQLite 持久化，支持 upsert 语义
+
 ## [0.42.0] - 2026-07-21
 
 ### P042 Extension Ecosystem — Agent 能力扩展层

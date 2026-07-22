@@ -207,6 +207,16 @@ core-agent/
 ├── core-agent-subagent/       # SubAgent 运行时（创建/生命周期/注册）
 ├── core-agent-message/        # Agent 消息总线（Send/Receive/Broadcast/Mailbox）
 ├── core-agent-orchestrator/   # 多 Agent 编排（Sequential/Parallel/Supervisor/Debate）
+├── core-agent-evaluation/    # P5: 评价系统（Correctness/Quality/Safety/Cost）
+├── core-agent-learning/      # P5: 经验学习（Skill/Workflow/Prompt/Policy）
+├── core-agent-marketplace/   # P5: 能力市场（Agent/Skill/Plugin/Workflow）
+├── core-agent-network/       # P5: Agent 网络（注册/发现/状态/信任）
+├── core-agent-autonomous/    # P5: 自主循环（L0-L4 自治等级）
+├── core-agent-document/      # P6: 文档解析管道（Markdown/TXT/PDF/DOCX/HTML）
+├── core-agent-vector/        # P6: 向量存储与混合搜索（Cosine + FTS5）
+├── core-agent-rag/           # P6: 检索增强生成管道
+├── core-agent-knowledge/     # P6: 统一知识管理（知识大脑）
+├── core-agent-semantic/      # P6: 知识图谱（实体抽取+关系存储+图查询）
 ├── agent-cli/                # Terminal 客户端
 ├── agent-desktop/            # Desktop 客户端（Tauri + Vue 3）
 └── src/                      # EnterpriseAgent 组合入口
