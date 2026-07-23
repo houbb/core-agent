@@ -813,17 +813,19 @@ fn parse_diff_line(text: &str) -> Option<Vec<Span<'static>>> {
         ]);
     }
     if trimmed.starts_with('+') {
-        let (prefix, rest) = text.split_at(text.len() - trimmed.len() + 1);
+        let prefix = &text[..text.len() - trimmed.len()];
+        let rest = &text[text.len() - trimmed.len() + 1..];
         return Some(vec![
-            Span::styled(prefix, Style::default().fg(GREEN)),
-            Span::styled(rest, Style::default().fg(GREEN)),
+            Span::styled(prefix.to_string(), Style::default().fg(GREEN)),
+            Span::styled(rest.to_string(), Style::default().fg(GREEN)),
         ]);
     }
     if trimmed.starts_with('-') {
-        let (prefix, rest) = text.split_at(text.len() - trimmed.len() + 1);
+        let prefix = &text[..text.len() - trimmed.len()];
+        let rest = &text[text.len() - trimmed.len() + 1..];
         return Some(vec![
-            Span::styled(prefix, Style::default().fg(RED)),
-            Span::styled(rest, Style::default().fg(RED)),
+            Span::styled(prefix.to_string(), Style::default().fg(RED)),
+            Span::styled(rest.to_string(), Style::default().fg(RED)),
         ]);
     }
     None
