@@ -22,6 +22,8 @@
 - **AGENTS.md 自动发现** — 项目根目录自动发现 `AGENTS.override.md` / `AGENTS.md` 作为项目级指令
 - **Memory 文件索引** — `.claude/memory/` 目录下的 `MEMORY.md` 索引，文件级透明记忆
 - **TUI 状态栏** — 终端底部显示当前模型、权限模式、运行状态
+- **TUI Diff 渲染** — 终端内 `+`/`-`/`@@` 行直接着色，文件变更一目了然
+- **git.push 工具** — Agent 可完成 `commit → push` 全流程 Git 工作流
 
 用户只需选择 **Terminal** 或 **Desktop** 两种接入方式，底层共享同一套能力。
 

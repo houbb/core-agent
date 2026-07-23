@@ -1,6 +1,38 @@
 # CHANGELOG
 
-## [0.45.0] - 2026-07-23
+## [0.46.0] - 2026-07-23
+
+### 与 OpenAI Codex CLI 差距补齐 — Margin to Codex CLI
+
+实现 `design-docs/046-margin-to-codex.md` 定义的 P0 优先级差距补齐，聚焦 AI 驱动的 Git 工作流和终端内 diff 可视化。
+
+#### 新增：git.push 工具（`core-agent-tool/src/builtin/git/tools.rs`）
+
+- **GitPushTool** — 从 stub 升级为真实实现，支持 `push` 到远程仓库
+- **参数支持** — `remote`（默认 origin）、`branch`、`force`（--force-with-lease）、`set_upstream`（-u）
+- **权限策略** — 默认 `Ask`（需要审批），安全可控
+- 配合已有的 `git.commit` / `git.branch` / `git.checkout`，Agent 可完成 `commit → push` 全流程
+
+#### 新增：TUI Diff 渲染（`agent-cli/src/tui.rs`）
+
+- **`parse_diff_line()` 函数** — 检测 diff 行前缀（`+`/`-`/`@@`/`---`/`+++`）并按颜色渲染
+- **绿色 `+` 行** — 新增行以绿色（RGB 80,200,120）高亮
+- **红色 `-` 行** — 删除行以红色（RGB 255,100,100）高亮
+- **青色 `@@` 行** — Hunk 头部以青色加粗显示
+- **灰色 `---`/`+++` 行** — 文件头以灰色加粗显示
+- 与已有 `parse_file_paths()` 文件路径高亮协作，diff 行优先匹配
+
+#### 新增：差距分析文档（`docs/margin-to-codex-analysis.md`）
+
+- 与 OpenAI Codex CLI 的完整差距分析，覆盖 7 个维度
+- 按 P0/P1/P2/P3 优先级排序，共 10 个差距点
+- 明确 core-agent 的企业级优势和多 Agent 编排差异化
+
+#### 验证
+
+- `core-agent-tool` 111 个测试全部通过（含 3 个 git 测试）
+- `agent-cli` 9 个 TUI 测试全部通过（无回归）
+- 编译通过，0 新增 warning
 
 ### 与 Claude Code 差距补齐 — Margin to Claude Code
 
