@@ -24,6 +24,7 @@ mod hook_runtime;
 mod interaction;
 mod managed_policy;
 mod mcp_runtime;
+mod memory_index;
 mod memory_tools;
 mod observability;
 mod skill_tools;
@@ -71,6 +72,9 @@ pub use guidance::{
     InstructionChain, InstructionDocument, LoadedSkill, SkillCatalog, SkillDescriptor, SkillRoot,
     DEFAULT_INSTRUCTION_BUDGET_BYTES, DEFAULT_MAX_SKILLS, DEFAULT_SKILL_FILE_LIMIT_BYTES,
     DEFAULT_SKILL_METADATA_BUDGET_BYTES,
+};
+pub use memory_index::{
+    FileMemoryEntry, FileMemoryMetadata, MemoryIndex, MemoryIndexError, MemoryIndexResult,
 };
 pub use interaction::{
     ContextCandidateIndex, ContextCandidateSearch, ContextMentionLimits, ContextMentionResolver,
