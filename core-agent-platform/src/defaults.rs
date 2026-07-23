@@ -2,8 +2,9 @@ use std::collections::HashMap;
 use std::sync::{Mutex, RwLock};
 
 use crate::domain::{
-    validate_actor, AuditRecord, GovernanceRequest, HealthStatus, MetricPoint,
-    PlatformOrganization, PlatformPolicy, PolicyEffect, Quota, Tenant, TenantState,
+    validate_actor, ActionPolicy, AuditRecord, DataPolicy, Department, EnterpriseUser,
+    GovernanceRequest, HealthStatus, MetricPoint, PlatformOrganization, PlatformPolicy, PolicyEffect,
+    Quota, Team, Tenant, TenantState,
 };
 use crate::error::{PlatformError, PlatformResult};
 use crate::infrastructure::{
@@ -96,6 +97,11 @@ impl MetricsCenter for InMemoryMetricsCenter {
 struct State {
     tenants: HashMap<Uuid, Tenant>,
     organizations: HashMap<Uuid, PlatformOrganization>,
+    departments: HashMap<Uuid, Department>,
+    teams: HashMap<Uuid, Team>,
+    users: HashMap<Uuid, EnterpriseUser>,
+    data_policies: HashMap<Uuid, DataPolicy>,
+    action_policies: HashMap<Uuid, ActionPolicy>,
     policies: HashMap<Uuid, PlatformPolicy>,
     quotas: HashMap<Uuid, Quota>,
     audits: HashMap<Uuid, AuditRecord>,
@@ -352,6 +358,112 @@ impl PlatformStore for InMemoryPlatformStore {
             .cloned()
             .collect::<Vec<_>>();
         v.sort_by_key(|x| (std::cmp::Reverse(x.created_at), x.id));
+        Ok(v)
+    }
+    async fn save_department(&self, v: &Department, e: Option<u64>, actor: &str) -> PlatformResult<()> {
+        validate_actor(actor)?;
+        v.validate()?;
+        let mut s = self.write()?;
+        active_owner(&s, v.tenant_id)?;
+        version(s.departments.get(&v.id).map(|x| x.version), e, v.version)?;
+        if s.departments.values().any(|x| x.id != v.id && x.tenant_id == v.tenant_id && x.key == v.key) {
+            return Err(PlatformError::Conflict("Department key exists".into()));
+        }
+        s.departments.insert(v.id, v.clone());
+        Ok(())
+    }
+    async fn find_department(&self, id: Uuid) -> PlatformResult<Option<Department>> {
+        Ok(self.read()?.departments.get(&id).cloned())
+    }
+    async fn list_departments(&self, t: Uuid, o: Uuid) -> PlatformResult<Vec<Department>> {
+        let s = self.read()?;
+        active_owner(&s, t)?;
+        let mut v = s.departments.values().filter(|x| x.tenant_id == t && x.organization_id == o).cloned().collect::<Vec<_>>();
+        v.sort_by_key(|x| (x.key.clone(), x.id));
+        Ok(v)
+    }
+    async fn save_team(&self, v: &Team, e: Option<u64>, actor: &str) -> PlatformResult<()> {
+        validate_actor(actor)?;
+        v.validate()?;
+        let mut s = self.write()?;
+        active_owner(&s, v.tenant_id)?;
+        version(s.teams.get(&v.id).map(|x| x.version), e, v.version)?;
+        if s.teams.values().any(|x| x.id != v.id && x.tenant_id == v.tenant_id && x.key == v.key) {
+            return Err(PlatformError::Conflict("Team key exists".into()));
+        }
+        s.teams.insert(v.id, v.clone());
+        Ok(())
+    }
+    async fn find_team(&self, id: Uuid) -> PlatformResult<Option<Team>> {
+        Ok(self.read()?.teams.get(&id).cloned())
+    }
+    async fn list_teams(&self, t: Uuid, o: Uuid, d: Option<Uuid>) -> PlatformResult<Vec<Team>> {
+        let s = self.read()?;
+        active_owner(&s, t)?;
+        let mut v = s.teams.values().filter(|x| {
+            x.tenant_id == t && x.organization_id == o && d.map_or(true, |dept_id| x.department_id == Some(dept_id))
+        }).cloned().collect::<Vec<_>>();
+        v.sort_by_key(|x| (x.key.clone(), x.id));
+        Ok(v)
+    }
+    async fn save_user(&self, v: &EnterpriseUser, e: Option<u64>, actor: &str) -> PlatformResult<()> {
+        validate_actor(actor)?;
+        v.validate()?;
+        let mut s = self.write()?;
+        active_owner(&s, v.tenant_id)?;
+        version(s.users.get(&v.id).map(|x| x.version), e, v.version)?;
+        if s.users.values().any(|x| x.id != v.id && x.tenant_id == v.tenant_id && x.external_subject == v.external_subject) {
+            return Err(PlatformError::Conflict("User external subject exists".into()));
+        }
+        s.users.insert(v.id, v.clone());
+        Ok(())
+    }
+    async fn find_user(&self, id: Uuid) -> PlatformResult<Option<EnterpriseUser>> {
+        Ok(self.read()?.users.get(&id).cloned())
+    }
+    async fn list_users(&self, t: Uuid) -> PlatformResult<Vec<EnterpriseUser>> {
+        let s = self.read()?;
+        active_owner(&s, t)?;
+        let mut v = s.users.values().filter(|x| x.tenant_id == t).cloned().collect::<Vec<_>>();
+        v.sort_by_key(|x| (x.external_subject.clone(), x.id));
+        Ok(v)
+    }
+    async fn save_data_policy(&self, v: &DataPolicy, e: Option<u64>, actor: &str) -> PlatformResult<()> {
+        validate_actor(actor)?;
+        v.validate()?;
+        let mut s = self.write()?;
+        active_owner(&s, v.tenant_id)?;
+        version(s.data_policies.get(&v.id).map(|x| x.version), e, v.version)?;
+        if s.data_policies.values().any(|x| x.id != v.id && x.tenant_id == v.tenant_id && x.key == v.key) {
+            return Err(PlatformError::Conflict("DataPolicy key exists".into()));
+        }
+        s.data_policies.insert(v.id, v.clone());
+        Ok(())
+    }
+    async fn list_data_policies(&self, t: Uuid) -> PlatformResult<Vec<DataPolicy>> {
+        let s = self.read()?;
+        active_owner(&s, t)?;
+        let mut v = s.data_policies.values().filter(|x| x.tenant_id == t).cloned().collect::<Vec<_>>();
+        v.sort_by_key(|x| (x.key.clone(), x.id));
+        Ok(v)
+    }
+    async fn save_action_policy(&self, v: &ActionPolicy, e: Option<u64>, actor: &str) -> PlatformResult<()> {
+        validate_actor(actor)?;
+        v.validate()?;
+        let mut s = self.write()?;
+        active_owner(&s, v.tenant_id)?;
+        version(s.action_policies.get(&v.id).map(|x| x.version), e, v.version)?;
+        if s.action_policies.values().any(|x| x.id != v.id && x.tenant_id == v.tenant_id && x.key == v.key) {
+            return Err(PlatformError::Conflict("ActionPolicy key exists".into()));
+        }
+        s.action_policies.insert(v.id, v.clone());
+        Ok(())
+    }
+    async fn list_action_policies(&self, t: Uuid) -> PlatformResult<Vec<ActionPolicy>> {
+        let s = self.read()?;
+        active_owner(&s, t)?;
+        let mut v = s.action_policies.values().filter(|x| x.tenant_id == t).cloned().collect::<Vec<_>>();
+        v.sort_by_key(|x| (x.key.clone(), x.id));
         Ok(v)
     }
 }

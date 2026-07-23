@@ -2,8 +2,9 @@ use crate::defaults::{
     DeterministicPolicyEngine, EmptyHealthCenter, InMemoryMetricsCenter, InMemoryPlatformStore,
 };
 use crate::domain::{
-    validate_actor, AuditDecision, AuditRecord, GovernanceDecision, GovernanceRequest,
-    HealthStatus, MetricPoint, PlatformOrganization, PlatformPolicy, PlatformState, Quota, Tenant,
+    validate_actor, ActionPolicy, AuditDecision, AuditRecord, DataPolicy,
+    Department, EnterpriseUser, GovernanceDecision, GovernanceRequest, HealthStatus, MetricPoint,
+    PlatformOrganization, PlatformPolicy, PlatformState, Quota, Team, Tenant,
     TenantState,
 };
 use crate::error::{PlatformError, PlatformResult};
@@ -166,6 +167,58 @@ impl PlatformManager {
         self.store.save_organization(&v, None, &v.actor).await?;
         Ok(v)
     }
+    pub async fn create_department(&self, v: Department) -> PlatformResult<Department> {
+        self.require_running()?;
+        v.validate()?;
+        self.required_active_tenant(v.tenant_id).await?;
+        let org = self.store.find_organization(v.organization_id).await?
+            .ok_or_else(|| PlatformError::not_found(v.organization_id))?;
+        if org.tenant_id != v.tenant_id {
+            return Err(PlatformError::Validation("cross-Tenant Department organization".into()));
+        }
+        self.store.save_department(&v, None, &v.actor).await?;
+        Ok(v)
+    }
+    pub async fn create_team(&self, v: Team) -> PlatformResult<Team> {
+        self.require_running()?;
+        v.validate()?;
+        self.required_active_tenant(v.tenant_id).await?;
+        let org = self.store.find_organization(v.organization_id).await?
+            .ok_or_else(|| PlatformError::not_found(v.organization_id))?;
+        if org.tenant_id != v.tenant_id {
+            return Err(PlatformError::Validation("cross-Tenant Team organization".into()));
+        }
+        if let Some(dept_id) = v.department_id {
+            let dept = self.store.find_department(dept_id).await?
+                .ok_or_else(|| PlatformError::not_found(dept_id))?;
+            if dept.tenant_id != v.tenant_id || dept.organization_id != v.organization_id {
+                return Err(PlatformError::Validation("cross-org Team department".into()));
+            }
+        }
+        self.store.save_team(&v, None, &v.actor).await?;
+        Ok(v)
+    }
+    pub async fn create_user(&self, v: EnterpriseUser) -> PlatformResult<EnterpriseUser> {
+        self.require_running()?;
+        v.validate()?;
+        self.required_active_tenant(v.tenant_id).await?;
+        self.store.save_user(&v, None, &v.actor).await?;
+        Ok(v)
+    }
+    pub async fn create_data_policy(&self, v: DataPolicy) -> PlatformResult<DataPolicy> {
+        self.require_running()?;
+        v.validate()?;
+        self.required_active_tenant(v.tenant_id).await?;
+        self.store.save_data_policy(&v, None, &v.actor).await?;
+        Ok(v)
+    }
+    pub async fn create_action_policy(&self, v: ActionPolicy) -> PlatformResult<ActionPolicy> {
+        self.require_running()?;
+        v.validate()?;
+        self.required_active_tenant(v.tenant_id).await?;
+        self.store.save_action_policy(&v, None, &v.actor).await?;
+        Ok(v)
+    }
     pub async fn create_policy(&self, v: PlatformPolicy) -> PlatformResult<PlatformPolicy> {
         self.require_running()?;
         v.validate()?;
@@ -310,6 +363,21 @@ impl PlatformManager {
     }
     pub async fn list_organizations(&self, t: Uuid) -> PlatformResult<Vec<PlatformOrganization>> {
         self.store.list_organizations(t).await
+    }
+    pub async fn list_departments(&self, t: Uuid, o: Uuid) -> PlatformResult<Vec<Department>> {
+        self.store.list_departments(t, o).await
+    }
+    pub async fn list_teams(&self, t: Uuid, o: Uuid, d: Option<Uuid>) -> PlatformResult<Vec<Team>> {
+        self.store.list_teams(t, o, d).await
+    }
+    pub async fn list_users(&self, t: Uuid) -> PlatformResult<Vec<EnterpriseUser>> {
+        self.store.list_users(t).await
+    }
+    pub async fn list_data_policies(&self, t: Uuid) -> PlatformResult<Vec<DataPolicy>> {
+        self.store.list_data_policies(t).await
+    }
+    pub async fn list_action_policies(&self, t: Uuid) -> PlatformResult<Vec<ActionPolicy>> {
+        self.store.list_action_policies(t).await
     }
     pub async fn list_policies(&self, t: Uuid) -> PlatformResult<Vec<PlatformPolicy>> {
         self.store.list_policies(t).await

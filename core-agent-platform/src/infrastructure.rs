@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::domain::{
-    AuditRecord, GovernanceRequest, HealthStatus, MetricPoint, PlatformOrganization,
-    PlatformPolicy, Quota, Tenant,
+    ActionPolicy, AuditRecord, DataPolicy, Department, EnterpriseUser, GovernanceRequest, HealthStatus, MetricPoint, PlatformOrganization,
+    PlatformPolicy, Quota, Team, Tenant,
 };
 use crate::error::PlatformResult;
 
@@ -83,6 +83,56 @@ pub trait PlatformStore: Send + Sync {
         request_id: Uuid,
     ) -> PlatformResult<Option<AuditRecord>>;
     async fn list_audits(&self, tenant_id: Uuid) -> PlatformResult<Vec<AuditRecord>>;
+    async fn save_department(
+        &self,
+        value: &Department,
+        expected: Option<u64>,
+        actor: &str,
+    ) -> PlatformResult<()>;
+    async fn find_department(&self, id: Uuid) -> PlatformResult<Option<Department>>;
+    async fn list_departments(
+        &self,
+        tenant_id: Uuid,
+        organization_id: Uuid,
+    ) -> PlatformResult<Vec<Department>>;
+    async fn save_team(
+        &self,
+        value: &Team,
+        expected: Option<u64>,
+        actor: &str,
+    ) -> PlatformResult<()>;
+    async fn find_team(&self, id: Uuid) -> PlatformResult<Option<Team>>;
+    async fn list_teams(
+        &self,
+        tenant_id: Uuid,
+        organization_id: Uuid,
+        department_id: Option<Uuid>,
+    ) -> PlatformResult<Vec<Team>>;
+    async fn save_user(
+        &self,
+        value: &EnterpriseUser,
+        expected: Option<u64>,
+        actor: &str,
+    ) -> PlatformResult<()>;
+    async fn find_user(&self, id: Uuid) -> PlatformResult<Option<EnterpriseUser>>;
+    async fn list_users(
+        &self,
+        tenant_id: Uuid,
+    ) -> PlatformResult<Vec<EnterpriseUser>>;
+    async fn save_data_policy(
+        &self,
+        value: &DataPolicy,
+        expected: Option<u64>,
+        actor: &str,
+    ) -> PlatformResult<()>;
+    async fn list_data_policies(&self, tenant_id: Uuid) -> PlatformResult<Vec<DataPolicy>>;
+    async fn save_action_policy(
+        &self,
+        value: &ActionPolicy,
+        expected: Option<u64>,
+        actor: &str,
+    ) -> PlatformResult<()>;
+    async fn list_action_policies(&self, tenant_id: Uuid) -> PlatformResult<Vec<ActionPolicy>>;
 }
 
 pub trait PlatformPolicyEngine: Send + Sync {

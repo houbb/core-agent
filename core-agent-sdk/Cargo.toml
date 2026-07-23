@@ -1,16 +1,17 @@
 [package]
-name = "core-agent-governance"
+name = "core-agent-sdk"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Enterprise AI identity, asset governance and cost ledger"
+description = "Official Agent SDK — build, test, and publish agents, tools, skills, and plugins"
 
 [dependencies]
+async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
-core-agent-platform = { path = "../core-agent-platform" }
 serde = { version = "1", features = ["derive"] }
-sha2 = "0.10"
+serde_json = "1"
+serde_yaml = "0.9"
 thiserror = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 

@@ -217,6 +217,9 @@ core-agent/
 ├── core-agent-rag/           # P6: 检索增强生成管道
 ├── core-agent-knowledge/     # P6: 统一知识管理（知识大脑）
 ├── core-agent-semantic/      # P6: 知识图谱（实体抽取+关系存储+图查询）
+├── core-agent-sdk/           # P10: 官方 SDK（AgentBuilder/Client/Tool/Skill）
+├── core-agent-openapi/       # P10: OpenAPI 平台（API Key/Gateway/Rate Limit）
+├── core-agent-developer/     # P10: 开发者平台（Profile/Project/Manifest/Publish）
 ├── agent-cli/                # Terminal 客户端
 ├── agent-desktop/            # Desktop 客户端（Tauri + Vue 3）
 └── src/                      # EnterpriseAgent 组合入口

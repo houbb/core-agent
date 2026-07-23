@@ -12,6 +12,14 @@ const MAX_JSON_BYTES: usize = 256 * 1024;
 
 pub type PlatformMetadata = BTreeMap<String, Value>;
 
+fn glob_match(pattern: &str, value: &str) -> bool {
+    if pattern == "*" { return true; }
+    if !pattern.contains('*') { return pattern == value; }
+    let prefix: &str = pattern.split('*').next().unwrap_or("");
+    let suffix: &str = pattern.rsplit('*').next().unwrap_or("");
+    value.starts_with(prefix) && value.ends_with(suffix)
+}
+
 macro_rules! string_enum {
     ($name:ident { $($variant:ident => $value:literal),+ $(,)? }) => {
         impl $name {
@@ -19,6 +27,49 @@ macro_rules! string_enum {
             pub fn parse(value: &str) -> Option<Self> { match value { $($value => Some(Self::$variant),)+ _ => None } }
         }
     };
+}
+
+// ─── Tenant Plan & Settings ───────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TenantPlan {
+    Free,
+    Pro,
+    Enterprise,
+    Custom,
+}
+string_enum!(TenantPlan { Free=>"FREE", Pro=>"PRO", Enterprise=>"ENTERPRISE", Custom=>"CUSTOM" });
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TenantSettings {
+    pub max_users: u32,
+    pub max_agents: u32,
+    pub max_organizations: u32,
+    pub features: BTreeSet<String>,
+}
+impl TenantSettings {
+    pub fn free() -> Self {
+        Self { max_users: 5, max_agents: 3, max_organizations: 1, features: BTreeSet::new() }
+    }
+    pub fn pro() -> Self {
+        Self { max_users: 50, max_agents: 20, max_organizations: 5, features: BTreeSet::new() }
+    }
+    pub fn enterprise() -> Self {
+        Self { max_users: 10000, max_agents: 1000, max_organizations: 100, features: BTreeSet::new() }
+    }
+    pub fn validate(&self) -> PlatformResult<()> {
+        if self.max_users == 0 || self.max_agents == 0 || self.max_organizations == 0 {
+            return Err(PlatformError::Validation("TenantSettings limits must be > 0".into()));
+        }
+        if self.features.len() > MAX_ITEMS {
+            return Err(PlatformError::Validation("TenantSettings features exceed 256".into()));
+        }
+        for f in &self.features {
+            validate_key("feature", f)?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -36,6 +87,8 @@ pub struct Tenant {
     pub key: String,
     pub name: String,
     pub state: TenantState,
+    pub plan: TenantPlan,
+    pub settings: TenantSettings,
     pub metadata: PlatformMetadata,
     pub version: u64,
     pub actor: String,
@@ -51,6 +104,8 @@ impl Tenant {
             key: key.into(),
             name: name.into(),
             state: TenantState::Active,
+            plan: TenantPlan::Free,
+            settings: TenantSettings::free(),
             metadata: BTreeMap::new(),
             version: 1,
             actor: actor.into(),
@@ -61,6 +116,7 @@ impl Tenant {
     pub fn validate(&self) -> PlatformResult<()> {
         validate_key("tenant key", &self.key)?;
         validate_text("tenant name", &self.name, 256)?;
+        self.settings.validate()?;
         validate_metadata(&self.metadata)?;
         validate_entity(self.version, self.created_at, self.updated_at, &self.actor)
     }
@@ -114,13 +170,271 @@ impl PlatformOrganization {
     }
 }
 
+// ─── Department / Team / EnterpriseUser ──────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Department {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub organization_id: Uuid,
+    pub parent_id: Option<Uuid>,
+    pub key: String,
+    pub name: String,
+    pub metadata: PlatformMetadata,
+    pub version: u64,
+    pub actor: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+impl Department {
+    pub fn new(tenant_id: Uuid, organization_id: Uuid, key: impl Into<String>, name: impl Into<String>, actor: impl Into<String>) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4(), tenant_id, organization_id, parent_id: None,
+            key: key.into(), name: name.into(), metadata: BTreeMap::new(),
+            version: 1, actor: actor.into(), created_at: now, updated_at: now,
+        }
+    }
+    pub fn validate(&self) -> PlatformResult<()> {
+        validate_key("department key", &self.key)?;
+        validate_text("department name", &self.name, 256)?;
+        validate_metadata(&self.metadata)?;
+        if self.parent_id == Some(self.id) {
+            return Err(PlatformError::Validation("Department cannot parent itself".into()));
+        }
+        validate_entity(self.version, self.created_at, self.updated_at, &self.actor)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Team {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub organization_id: Uuid,
+    pub department_id: Option<Uuid>,
+    pub key: String,
+    pub name: String,
+    pub metadata: PlatformMetadata,
+    pub version: u64,
+    pub actor: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+impl Team {
+    pub fn new(tenant_id: Uuid, organization_id: Uuid, key: impl Into<String>, name: impl Into<String>, actor: impl Into<String>) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4(), tenant_id, organization_id, department_id: None,
+            key: key.into(), name: name.into(), metadata: BTreeMap::new(),
+            version: 1, actor: actor.into(), created_at: now, updated_at: now,
+        }
+    }
+    pub fn validate(&self) -> PlatformResult<()> {
+        validate_key("team key", &self.key)?;
+        validate_text("team name", &self.name, 256)?;
+        validate_metadata(&self.metadata)?;
+        validate_entity(self.version, self.created_at, self.updated_at, &self.actor)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EnterpriseUser {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub external_subject: String,
+    pub display_name: String,
+    pub email: String,
+    pub department_ids: BTreeSet<Uuid>,
+    pub team_ids: BTreeSet<Uuid>,
+    pub roles: BTreeSet<String>,
+    pub state: TenantState,
+    pub metadata: PlatformMetadata,
+    pub version: u64,
+    pub actor: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+impl EnterpriseUser {
+    pub fn new(tenant_id: Uuid, external_subject: impl Into<String>, display_name: impl Into<String>, actor: impl Into<String>) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4(), tenant_id,
+            external_subject: external_subject.into(),
+            display_name: display_name.into(),
+            email: String::new(), department_ids: BTreeSet::new(), team_ids: BTreeSet::new(),
+            roles: BTreeSet::new(), state: TenantState::Active,
+            metadata: BTreeMap::new(), version: 1, actor: actor.into(),
+            created_at: now, updated_at: now,
+        }
+    }
+    pub fn validate(&self) -> PlatformResult<()> {
+        validate_key("user external subject", &self.external_subject)?;
+        validate_text("user display name", &self.display_name, 256)?;
+        validate_text("user email", &self.email, 256)?;
+        if self.department_ids.len() > MAX_ITEMS || self.team_ids.len() > MAX_ITEMS || self.roles.len() > MAX_ITEMS {
+            return Err(PlatformError::Validation("EnterpriseUser sets exceed 256".into()));
+        }
+        validate_metadata(&self.metadata)?;
+        validate_entity(self.version, self.created_at, self.updated_at, &self.actor)
+    }
+}
+
+// ─── Tenant Context ──────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TenantContext {
+    pub tenant_id: Uuid,
+    pub tenant_key: String,
+    pub tenant_name: String,
+    pub tenant_plan: TenantPlan,
+    pub organization_id: Uuid,
+    pub department_id: Option<Uuid>,
+    pub team_id: Option<Uuid>,
+    pub user_id: Option<Uuid>,
+    pub roles: BTreeSet<String>,
+}
+
+// ─── Policy ──────────────────────────────────────────────────────────────
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum PolicyEffect {
     Allow,
     Deny,
+    Ask,
 }
-string_enum!(PolicyEffect { Allow=>"ALLOW", Deny=>"DENY" });
+string_enum!(PolicyEffect { Allow=>"ALLOW", Deny=>"DENY", Ask=>"ASK" });
+
+// ─── Data Policy ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DataClassification {
+    Public,
+    Internal,
+    Confidential,
+    Restricted,
+}
+string_enum!(DataClassification { Public=>"PUBLIC", Internal=>"INTERNAL", Confidential=>"CONFIDENTIAL", Restricted=>"RESTRICTED" });
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DataPolicy {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub organization_id: Option<Uuid>,
+    pub key: String,
+    pub name: String,
+    pub data_classification: DataClassification,
+    pub resource_pattern: String,
+    pub allowed_actions: BTreeSet<String>,
+    pub denied_actions: BTreeSet<String>,
+    pub enabled: bool,
+    pub metadata: PlatformMetadata,
+    pub version: u64,
+    pub actor: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+impl DataPolicy {
+    pub fn new(tenant_id: Uuid, key: impl Into<String>, name: impl Into<String>, classification: DataClassification, actor: impl Into<String>) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4(), tenant_id, organization_id: None,
+            key: key.into(), name: name.into(),
+            data_classification: classification,
+            resource_pattern: String::new(),
+            allowed_actions: BTreeSet::new(), denied_actions: BTreeSet::new(),
+            enabled: true, metadata: BTreeMap::new(),
+            version: 1, actor: actor.into(), created_at: now, updated_at: now,
+        }
+    }
+    pub fn validate(&self) -> PlatformResult<()> {
+        validate_key("data policy key", &self.key)?;
+        validate_text("data policy name", &self.name, 256)?;
+        validate_metadata(&self.metadata)?;
+        if self.allowed_actions.is_empty() && self.denied_actions.is_empty() {
+            return Err(PlatformError::Validation("DataPolicy must have allowed or denied actions".into()));
+        }
+        for a in &self.allowed_actions { validate_key("data policy allowed action", a)?; }
+        for a in &self.denied_actions { validate_key("data policy denied action", a)?; }
+        validate_entity(self.version, self.created_at, self.updated_at, &self.actor)
+    }
+    pub fn evaluate(&self, classification: DataClassification, resource: &str, action: &str) -> PolicyEffect {
+        if !self.enabled { return PolicyEffect::Allow; }
+        if classification != self.data_classification { return PolicyEffect::Allow; }
+        if !self.resource_pattern.is_empty() && !glob_match(&self.resource_pattern, resource) { return PolicyEffect::Allow; }
+        if self.denied_actions.contains("*") || self.denied_actions.contains(action) { return PolicyEffect::Deny; }
+        if self.allowed_actions.contains("*") || self.allowed_actions.contains(action) { return PolicyEffect::Allow; }
+        PolicyEffect::Deny // default deny for classified data
+    }
+}
+
+// ─── Action Policy ───────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ActionEnvironment {
+    Development,
+    Staging,
+    Production,
+}
+string_enum!(ActionEnvironment { Development=>"DEVELOPMENT", Staging=>"STAGING", Production=>"PRODUCTION" });
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ActionRiskLevel {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+string_enum!(ActionRiskLevel { Low=>"LOW", Medium=>"MEDIUM", High=>"HIGH", Critical=>"CRITICAL" });
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActionPolicy {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub organization_id: Option<Uuid>,
+    pub key: String,
+    pub name: String,
+    pub action_pattern: String,
+    pub environment: ActionEnvironment,
+    pub risk_level: ActionRiskLevel,
+    pub required_approval: bool,
+    pub enabled: bool,
+    pub metadata: PlatformMetadata,
+    pub version: u64,
+    pub actor: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+impl ActionPolicy {
+    pub fn new(tenant_id: Uuid, key: impl Into<String>, name: impl Into<String>, action_pattern: impl Into<String>, environment: ActionEnvironment, actor: impl Into<String>) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4(), tenant_id, organization_id: None,
+            key: key.into(), name: name.into(),
+            action_pattern: action_pattern.into(),
+            environment, risk_level: ActionRiskLevel::Medium,
+            required_approval: false, enabled: true, metadata: BTreeMap::new(),
+            version: 1, actor: actor.into(), created_at: now, updated_at: now,
+        }
+    }
+    pub fn validate(&self) -> PlatformResult<()> {
+        validate_key("action policy key", &self.key)?;
+        validate_text("action policy name", &self.name, 256)?;
+        validate_metadata(&self.metadata)?;
+        validate_entity(self.version, self.created_at, self.updated_at, &self.actor)
+    }
+    pub fn matches(&self, action: &str, environment: ActionEnvironment) -> bool {
+        if !self.enabled { return false; }
+        if self.environment != environment { return false; }
+        self.action_pattern == "*" || self.action_pattern == action
+            || (action.starts_with(&self.action_pattern.replace('*', "")) && self.action_pattern.contains('*'))
+    }
+}
+
+// ─── PolicyRule ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyRule {
@@ -358,6 +672,7 @@ pub struct GovernanceRequest {
     pub quota_key: Option<String>,
     pub units: u64,
     pub actor: String,
+    pub tenant_context: Option<TenantContext>,
 }
 impl GovernanceRequest {
     pub fn new(
@@ -378,6 +693,7 @@ impl GovernanceRequest {
             quota_key: None,
             units: 0,
             actor: actor.into(),
+            tenant_context: None,
         }
     }
     pub fn validate(&self) -> PlatformResult<()> {
@@ -549,5 +865,80 @@ mod tests {
         t.metadata
             .insert("nested".into(), serde_json::json!({"api_key":"x"}));
         assert!(t.validate().is_err());
+    }
+    #[test]
+    fn tenant_plan_and_settings() {
+        let t = Tenant::new("t1", "Test", "admin");
+        assert_eq!(t.plan, TenantPlan::Free);
+        assert_eq!(t.settings.max_users, 5);
+        assert!(t.validate().is_ok());
+        let mut t2 = Tenant::new("t2", "Enterprise", "admin");
+        t2.plan = TenantPlan::Enterprise;
+        t2.settings = TenantSettings::enterprise();
+        assert!(t2.validate().is_ok());
+    }
+    #[test]
+    fn department_validate() {
+        let d = Department::new(Uuid::new_v4(), Uuid::new_v4(), "eng", "Engineering", "admin");
+        assert!(d.validate().is_ok());
+        let mut bad = d.clone();
+        bad.parent_id = Some(bad.id);
+        assert!(bad.validate().is_err());
+    }
+    #[test]
+    fn team_validate() {
+        let t = Team::new(Uuid::new_v4(), Uuid::new_v4(), "platform", "Platform Team", "admin");
+        assert!(t.validate().is_ok());
+    }
+    #[test]
+    fn enterprise_user_validate() {
+        let mut u = EnterpriseUser::new(Uuid::new_v4(), "alice", "Alice", "admin");
+        u.email = "alice@example.com".into();
+        assert!(u.validate().is_ok());
+    }
+    #[test]
+    fn data_policy_evaluate() {
+        let dp = DataPolicy {
+            id: Uuid::new_v4(), tenant_id: Uuid::new_v4(), organization_id: None,
+            key: "salary".into(), name: "Salary Data".into(),
+            data_classification: DataClassification::Confidential,
+            resource_pattern: "salary/*".into(),
+            allowed_actions: ["read.self".into()].into_iter().collect(),
+            denied_actions: ["read.all".into(), "write".into()].into_iter().collect(),
+            enabled: true, metadata: BTreeMap::new(),
+            version: 1, actor: "admin".into(),
+            created_at: Utc::now(), updated_at: Utc::now(),
+        };
+        assert_eq!(dp.evaluate(DataClassification::Public, "salary/abc", "read.all"), PolicyEffect::Allow);
+        assert_eq!(dp.evaluate(DataClassification::Confidential, "salary/abc", "read.all"), PolicyEffect::Deny);
+        assert_eq!(dp.evaluate(DataClassification::Confidential, "salary/abc", "read.self"), PolicyEffect::Allow);
+        assert_eq!(dp.evaluate(DataClassification::Confidential, "other", "read.all"), PolicyEffect::Allow);
+    }
+    #[test]
+    fn action_policy_matches() {
+        let ap = ActionPolicy::new(Uuid::new_v4(), "prod-deploy", "Production Deploy", "deploy.*", ActionEnvironment::Production, "admin");
+        assert!(ap.matches("deploy.release", ActionEnvironment::Production));
+        assert!(!ap.matches("deploy.release", ActionEnvironment::Development));
+        assert!(!ap.matches("build", ActionEnvironment::Production));
+    }
+    #[test]
+    fn policy_effect_ask_supported() {
+        assert_eq!(PolicyEffect::Ask.as_str(), "ASK");
+        assert_eq!(PolicyEffect::parse("ASK"), Some(PolicyEffect::Ask));
+    }
+    #[test]
+    fn tenant_context_create() {
+        let ctx = TenantContext {
+            tenant_id: Uuid::new_v4(), tenant_key: "t1".into(), tenant_name: "Test".into(),
+            tenant_plan: TenantPlan::Enterprise, organization_id: Uuid::new_v4(),
+            department_id: None, team_id: None, user_id: None, roles: BTreeSet::new(),
+        };
+        assert_eq!(ctx.tenant_plan, TenantPlan::Enterprise);
+    }
+    #[test]
+    fn glob_match_works() {
+        assert!(glob_match("*", "anything"));
+        assert!(glob_match("prefix/*", "prefix/value"));
+        assert!(!glob_match("prefix/*", "other/value"));
     }
 }

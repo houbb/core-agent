@@ -48,10 +48,13 @@ members = [
 		    "core-agent-rag",
 		    "core-agent-knowledge",
 		    "core-agent-semantic",
+		    "core-agent-sdk",
+		    "core-agent-openapi",
+		    "core-agent-developer",
 ]
 
 [workspace.package]
-version = "0.43.2"
+version = "0.44.1"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/core-agent/core-agent"

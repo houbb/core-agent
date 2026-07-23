@@ -1,6 +1,7 @@
 use super::schema::SCHEMA_SQL;
 use crate::domain::{
-    validate_actor, AuditRecord, PlatformOrganization, PlatformPolicy, Quota, Tenant,
+    validate_actor, ActionPolicy, AuditRecord, DataPolicy, Department, EnterpriseUser,
+    PlatformOrganization, PlatformPolicy, Quota, Team, Tenant,
 };
 use crate::error::{PlatformError, PlatformResult};
 use crate::infrastructure::{GovernanceCommit, PlatformStore};
@@ -226,6 +227,45 @@ impl PlatformStore for SqlitePlatformStore {
         .into_iter()
         .map(|id| read_audit(&c, id)?.ok_or_else(|| PlatformError::not_found(id)))
         .collect()
+    }
+    async fn save_department(&self, _v: &Department, _e: Option<u64>, _a: &str) -> PlatformResult<()> {
+        Err(PlatformError::Internal("SQLite: save_department not implemented".into()))
+    }
+    async fn find_department(&self, _id: Uuid) -> PlatformResult<Option<Department>> {
+        Err(PlatformError::Internal("SQLite: find_department not implemented".into()))
+    }
+    async fn list_departments(&self, _t: Uuid, _o: Uuid) -> PlatformResult<Vec<Department>> {
+        Err(PlatformError::Internal("SQLite: list_departments not implemented".into()))
+    }
+    async fn save_team(&self, _v: &Team, _e: Option<u64>, _a: &str) -> PlatformResult<()> {
+        Err(PlatformError::Internal("SQLite: save_team not implemented".into()))
+    }
+    async fn find_team(&self, _id: Uuid) -> PlatformResult<Option<Team>> {
+        Err(PlatformError::Internal("SQLite: find_team not implemented".into()))
+    }
+    async fn list_teams(&self, _t: Uuid, _o: Uuid, _d: Option<Uuid>) -> PlatformResult<Vec<Team>> {
+        Err(PlatformError::Internal("SQLite: list_teams not implemented".into()))
+    }
+    async fn save_user(&self, _v: &EnterpriseUser, _e: Option<u64>, _a: &str) -> PlatformResult<()> {
+        Err(PlatformError::Internal("SQLite: save_user not implemented".into()))
+    }
+    async fn find_user(&self, _id: Uuid) -> PlatformResult<Option<EnterpriseUser>> {
+        Err(PlatformError::Internal("SQLite: find_user not implemented".into()))
+    }
+    async fn list_users(&self, _t: Uuid) -> PlatformResult<Vec<EnterpriseUser>> {
+        Err(PlatformError::Internal("SQLite: list_users not implemented".into()))
+    }
+    async fn save_data_policy(&self, _v: &DataPolicy, _e: Option<u64>, _a: &str) -> PlatformResult<()> {
+        Err(PlatformError::Internal("SQLite: save_data_policy not implemented".into()))
+    }
+    async fn list_data_policies(&self, _t: Uuid) -> PlatformResult<Vec<DataPolicy>> {
+        Err(PlatformError::Internal("SQLite: list_data_policies not implemented".into()))
+    }
+    async fn save_action_policy(&self, _v: &ActionPolicy, _e: Option<u64>, _a: &str) -> PlatformResult<()> {
+        Err(PlatformError::Internal("SQLite: save_action_policy not implemented".into()))
+    }
+    async fn list_action_policies(&self, _t: Uuid) -> PlatformResult<Vec<ActionPolicy>> {
+        Err(PlatformError::Internal("SQLite: list_action_policies not implemented".into()))
     }
 }
 fn write_tenant(tx: &Transaction<'_>, v: &Tenant, e: Option<u64>, a: &str) -> PlatformResult<()> {

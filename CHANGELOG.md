@@ -1,5 +1,50 @@
 # CHANGELOG
 
+## [0.44.1] - 2026-07-22
+
+### P10 Agent Ecosystem Layer — Agent 生态平台层
+
+实现 `design-docs/044-core-ablity-p10-eco.md` 定义的 P10 Agent Ecosystem Layer，让第三方开发者围绕 Core-Agent 构建生态。
+
+#### 新 crate：core-agent-sdk
+
+- **AgentBuilder** — 声明式 Agent 构建器（name/version/model/tools/skills/instructions）
+- **AgentClient trait** — Chat / Execute 接口抽象
+- **AgentTool / AgentSkill / AgentPlugin trait** — 自定义组件接口定义
+- **AgentManifest / PluginManifest** — YAML/JSON 清单解析与验证
+- **PublishClient trait** — 发布 Agent 到 Marketplace 的接口
+- **ChatRequest / ChatResponse / ExecuteRequest / ExecuteResponse** — 标准请求/响应模型
+- 8 个单元测试覆盖 Builder 验证、Manifest 解析、序列化、状态枚举
+
+#### 新 crate：core-agent-openapi
+
+- **ApiKey** — API Key 模型（scope/quota/state/expiration），SHA-256 哈希存储
+- **ApiKeyScope** — 5 种权限范围：AgentChat / AgentExecute / WorkflowRun / KnowledgeSearch / Admin
+- **ApiKeyQuota** — 日配额管理（max_requests/max_tokens + usage tracking）
+- **RateLimit / RateLimitStatus** — 速率限制模型
+- **Gateway trait** — 认证→授权→路由的完整 Gateway 抽象
+- **OpenApiManager** — API Key 创建/认证/吊销生命周期管理
+- **AgentChatApi / TaskApi / WorkflowRunApi / KnowledgeSearchApi** — 4 种 API 请求/响应类型
+- 13 个单元测试覆盖 Key 验证、Scope 检查、Quota 耗尽、认证流程
+
+#### 新 crate：core-agent-developer
+
+- **DeveloperProfile** — 开发者身份注册与管理
+- **DeveloperProject** — 项目工作区模型（Active/Archived 状态）
+- **AgentManifest** — YAML/JSON 清单定义，支持 tools/skills/permissions/instructions
+- **AgentTestRun** — 测试运行记录（Passed/Failed/Error/Timeout + score）
+- **DeveloperDashboard** — 开发者仪表盘指标聚合
+- **DeveloperManager** — 完整的开发者工作流编排（注册→创建→测试→发布→归档）
+- **DeveloperProfileStore / DeveloperProjectStore** — In-Memory 默认实现
+- **Publisher / TestRunner trait** — 可插拔的发布和测试接口
+- 15 个单元测试覆盖 Profile 注册、Project 创建、归档、测试、Dashboard
+
+#### 兼容性
+
+- 新增 3 个 workspace 成员注册到 `Cargo.toml`
+- 不修改已有 ecosystem/marketplace 模块
+- 所有 49 个现有测试全部通过，无回归
+
 ## [0.43.2] - 2026-07-22
 
 ### P046 Knowledge Intelligence Layer — Agent 知识智能层
