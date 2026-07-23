@@ -434,6 +434,118 @@ impl ActionPolicy {
     }
 }
 
+// ─── Tool Policy ────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolPolicy {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub organization_id: Option<Uuid>,
+    pub key: String,
+    pub name: String,
+    pub tool_pattern: String,
+    pub allowed_categories: BTreeSet<String>,
+    pub denied_categories: BTreeSet<String>,
+    pub allowed_tools: BTreeSet<String>,
+    pub denied_tools: BTreeSet<String>,
+    pub enabled: bool,
+    pub metadata: PlatformMetadata,
+    pub version: u64,
+    pub actor: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+impl ToolPolicy {
+    pub fn new(tenant_id: Uuid, key: impl Into<String>, name: impl Into<String>, actor: impl Into<String>) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4(), tenant_id, organization_id: None,
+            key: key.into(), name: name.into(),
+            tool_pattern: String::new(),
+            allowed_categories: BTreeSet::new(), denied_categories: BTreeSet::new(),
+            allowed_tools: BTreeSet::new(), denied_tools: BTreeSet::new(),
+            enabled: true, metadata: BTreeMap::new(),
+            version: 1, actor: actor.into(), created_at: now, updated_at: now,
+        }
+    }
+    pub fn validate(&self) -> PlatformResult<()> {
+        validate_key("tool policy key", &self.key)?;
+        validate_text("tool policy name", &self.name, 256)?;
+        validate_metadata(&self.metadata)?;
+        for c in &self.allowed_categories { validate_key("tool policy allowed category", c)?; }
+        for c in &self.denied_categories { validate_key("tool policy denied category", c)?; }
+        for t in &self.allowed_tools { validate_key("tool policy allowed tool", t)?; }
+        for t in &self.denied_tools { validate_key("tool policy denied tool", t)?; }
+        validate_entity(self.version, self.created_at, self.updated_at, &self.actor)
+    }
+    pub fn evaluate(&self, tool_name: &str, category: &str) -> PolicyEffect {
+        if !self.enabled { return PolicyEffect::Allow; }
+        if !self.tool_pattern.is_empty() && !glob_match(&self.tool_pattern, tool_name) { return PolicyEffect::Allow; }
+        if self.denied_tools.contains("*") || self.denied_tools.contains(tool_name) { return PolicyEffect::Deny; }
+        if self.denied_categories.contains("*") || self.denied_categories.contains(category) { return PolicyEffect::Deny; }
+        if self.allowed_tools.contains("*") || self.allowed_tools.contains(tool_name) { return PolicyEffect::Allow; }
+        if self.allowed_categories.contains(category) { return PolicyEffect::Allow; }
+        PolicyEffect::Deny // default deny
+    }
+}
+
+// ─── Model Policy ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelPolicy {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub organization_id: Option<Uuid>,
+    pub key: String,
+    pub name: String,
+    pub allowed_providers: BTreeSet<String>,
+    pub denied_providers: BTreeSet<String>,
+    pub allowed_models: BTreeSet<String>,
+    pub denied_models: BTreeSet<String>,
+    pub max_input_tokens: u64,
+    pub max_output_tokens: u64,
+    pub require_approval_for_external: bool,
+    pub enabled: bool,
+    pub metadata: PlatformMetadata,
+    pub version: u64,
+    pub actor: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+impl ModelPolicy {
+    pub fn new(tenant_id: Uuid, key: impl Into<String>, name: impl Into<String>, actor: impl Into<String>) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4(), tenant_id, organization_id: None,
+            key: key.into(), name: name.into(),
+            allowed_providers: BTreeSet::new(), denied_providers: BTreeSet::new(),
+            allowed_models: BTreeSet::new(), denied_models: BTreeSet::new(),
+            max_input_tokens: 0, max_output_tokens: 0,
+            require_approval_for_external: false, enabled: true,
+            metadata: BTreeMap::new(),
+            version: 1, actor: actor.into(), created_at: now, updated_at: now,
+        }
+    }
+    pub fn validate(&self) -> PlatformResult<()> {
+        validate_key("model policy key", &self.key)?;
+        validate_text("model policy name", &self.name, 256)?;
+        validate_metadata(&self.metadata)?;
+        for p in &self.allowed_providers { validate_key("model policy allowed provider", p)?; }
+        for p in &self.denied_providers { validate_key("model policy denied provider", p)?; }
+        for m in &self.allowed_models { validate_key("model policy allowed model", m)?; }
+        for m in &self.denied_models { validate_key("model policy denied model", m)?; }
+        validate_entity(self.version, self.created_at, self.updated_at, &self.actor)
+    }
+    pub fn evaluate(&self, provider: &str, model: &str) -> PolicyEffect {
+        if !self.enabled { return PolicyEffect::Allow; }
+        if self.denied_providers.contains("*") || self.denied_providers.contains(provider) { return PolicyEffect::Deny; }
+        if self.denied_models.contains("*") || self.denied_models.contains(model) { return PolicyEffect::Deny; }
+        if self.allowed_models.contains("*") || self.allowed_models.contains(model) { return PolicyEffect::Allow; }
+        if self.allowed_providers.contains(provider) { return PolicyEffect::Allow; }
+        PolicyEffect::Deny // default deny
+    }
+}
+
 // ─── PolicyRule ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

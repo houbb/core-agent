@@ -217,6 +217,11 @@ core-agent/
 ├── core-agent-rag/           # P6: 检索增强生成管道
 ├── core-agent-knowledge/     # P6: 统一知识管理（知识大脑）
 ├── core-agent-semantic/      # P6: 知识图谱（实体抽取+关系存储+图查询）
+├── core-agent-governance/     # P9: 企业治理（Identity/RBAC/Secret/Compliance/Risk/Ownership）
+├── core-agent-platform/       # P9: 平台策略引擎（Tenant/Policy/Quota/Audit）
+├── core-agent-audit/          # P9: 审计日志（追加写入、不可篡改）
+├── core-agent-approval/       # P9: 审批流程（人机协作、风险引擎）
+├── core-agent-cost/           # P9: 成本控制（Token 计费、预算管理）
 ├── core-agent-sdk/           # P10: 官方 SDK（AgentBuilder/Client/Tool/Skill）
 ├── core-agent-openapi/       # P10: OpenAPI 平台（API Key/Gateway/Rate Limit）
 ├── core-agent-developer/     # P10: 开发者平台（Profile/Project/Manifest/Publish）

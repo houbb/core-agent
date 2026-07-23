@@ -784,7 +784,7 @@ impl ModelGovernanceRecord {
 
 // ─── Risk Assessment ──────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RiskLevel {
     Low,
@@ -853,6 +853,82 @@ impl AgentRiskAssessment {
     }
 }
 
+// ─── Agent Ownership ────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentOwnership {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub agent_id: Uuid,
+    pub agent_key: String,
+    pub owner_subject: String,
+    pub owner_principal_id: Uuid,
+    pub organization_id: Option<Uuid>,
+    pub department_id: Option<Uuid>,
+    pub team_id: Option<Uuid>,
+    pub authorized_users: BTreeSet<Uuid>,
+    pub authorized_roles: BTreeSet<String>,
+    pub allow_self_serve: bool,
+    pub version: u64,
+    pub actor: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+impl AgentOwnership {
+    pub fn new(tenant_id: Uuid, agent_id: Uuid, agent_key: impl Into<String>, owner_subject: impl Into<String>, owner_principal_id: Uuid) -> Self {
+        let now = Utc::now();
+        let owner = owner_subject.into();
+        Self {
+            id: Uuid::new_v4(), tenant_id, agent_id,
+            agent_key: agent_key.into(),
+            owner_subject: owner.clone(),
+            owner_principal_id,
+            organization_id: None, department_id: None, team_id: None,
+            authorized_users: BTreeSet::new(), authorized_roles: BTreeSet::new(),
+            allow_self_serve: true,
+            version: 1, actor: owner, created_at: now, updated_at: now,
+        }
+    }
+    fn validate(&self) -> EnterpriseResult<()> {
+        validate_key("agent ownership agent key", &self.agent_key)?;
+        validate_actor(&self.owner_subject)?;
+        validate_actor(&self.actor)?;
+        if self.authorized_users.len() > 256 || self.authorized_roles.len() > 256 {
+            return Err(EnterpriseError::Validation("agent ownership sets exceed 256".into()));
+        }
+        for role in &self.authorized_roles {
+            validate_key("agent ownership authorized role", role)?;
+        }
+        if self.version == 0 || self.updated_at < self.created_at {
+            return Err(EnterpriseError::Validation("agent ownership version or timestamps are invalid".into()));
+        }
+        Ok(())
+    }
+    pub fn is_authorized(&self, principal_id: &Uuid, roles: &BTreeSet<String>) -> bool {
+        if self.allow_self_serve && self.owner_principal_id == *principal_id { return true; }
+        if self.authorized_users.contains(principal_id) { return true; }
+        self.authorized_roles.iter().any(|role| roles.contains(role))
+    }
+}
+
+// ─── Compliance Dashboard ───────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComplianceDashboard {
+    pub tenant_id: Uuid,
+    pub total_agents: usize,
+    pub total_policies: usize,
+    pub total_audit_events: u64,
+    pub total_compliance_records: usize,
+    pub compliant_count: usize,
+    pub non_compliant_count: usize,
+    pub by_standard: BTreeMap<String, ComplianceStatusCounts>,
+    pub high_risk_agents: usize,
+    pub open_approval_requests: usize,
+    pub cost_by_currency: BTreeMap<String, u64>,
+    pub last_audit_at: Option<DateTime<Utc>>,
+}
+
 // ─── Governance Snapshot (existing, extended) ─────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -870,6 +946,7 @@ pub struct GovernanceSnapshot {
     pub compliance_records: usize,
     pub model_governance_records: usize,
     pub risk_assessments: usize,
+    pub agent_ownerships: usize,
 }
 
 // ─── State ────────────────────────────────────────────────────────────────
@@ -890,6 +967,7 @@ struct State {
     compliance_mappings: BTreeMap<Uuid, ComplianceMapping>,
     model_governance_records: BTreeMap<Uuid, ModelGovernanceRecord>,
     risk_assessments: BTreeMap<Uuid, AgentRiskAssessment>,
+    agent_ownerships: BTreeMap<Uuid, AgentOwnership>,
 }
 
 // ─── EnterpriseGovernanceManager ──────────────────────────────────────────
@@ -1301,10 +1379,77 @@ impl EnterpriseGovernanceManager {
             compliance_records: state.compliance_records.values().filter(|r| r.tenant_id == tenant).count(),
             model_governance_records: state.model_governance_records.values().filter(|r| r.tenant_id == tenant).count(),
             risk_assessments: state.risk_assessments.values().filter(|r| r.tenant_id == tenant).count(),
+            agent_ownerships: state.agent_ownerships.values().filter(|o| o.tenant_id == tenant).count(),
         })
     }
 
     // ─── Internal ───────────────────────────────────────────────────────
+
+    // ─── Agent Ownership ────────────────────────────────────────────────
+
+    pub fn register_agent_ownership(&self, value: AgentOwnership) -> EnterpriseResult<AgentOwnership> {
+        value.validate()?;
+        let mut state = self.write()?;
+        if state.agent_ownerships.values().any(|o| o.tenant_id == value.tenant_id && o.agent_id == value.agent_id) {
+            return Err(EnterpriseError::Conflict("agent ownership already registered".into()));
+        }
+        state.agent_ownerships.insert(value.id, value.clone());
+        Ok(value)
+    }
+
+    pub fn check_agent_access(&self, tenant_id: Uuid, agent_id: Uuid, principal_id: &Uuid, roles: &BTreeSet<String>) -> EnterpriseResult<bool> {
+        let state = self.read()?;
+        let ownership = state.agent_ownerships.values()
+            .find(|o| o.tenant_id == tenant_id && o.agent_id == agent_id)
+            .ok_or_else(|| EnterpriseError::NotFound("agent ownership not found".into()))?;
+        Ok(ownership.is_authorized(principal_id, roles))
+    }
+
+    pub fn list_agent_ownerships(&self, tenant: Uuid) -> EnterpriseResult<Vec<AgentOwnership>> {
+        Ok(self.read()?.agent_ownerships.values().filter(|o| o.tenant_id == tenant).cloned().collect())
+    }
+
+    // ─── Compliance Dashboard ───────────────────────────────────────────
+
+    pub fn compliance_dashboard(&self, tenant: Uuid) -> EnterpriseResult<ComplianceDashboard> {
+        let state = self.read()?;
+        let records: Vec<_> = state.compliance_records.values().filter(|r| r.tenant_id == tenant).collect();
+        let assessments: Vec<_> = state.risk_assessments.values().filter(|r| r.tenant_id == tenant).collect();
+        let costs: Vec<_> = state.costs.values().filter(|c| c.tenant_id == tenant).collect();
+
+        let mut by_standard = BTreeMap::new();
+        for r in &records {
+            let standard_key = format!("{:?}", r.standard);
+            let entry = by_standard.entry(standard_key).or_insert(ComplianceStatusCounts { total: 0, compliant: 0, non_compliant: 0 });
+            entry.total += 1;
+            match r.status {
+                ComplianceStatus::Compliant => entry.compliant += 1,
+                ComplianceStatus::NonCompliant => entry.non_compliant += 1,
+                ComplianceStatus::NotEvaluated => {}
+            }
+        }
+
+        let mut cost_by_currency = BTreeMap::new();
+        for cost in &costs {
+            let total = cost_by_currency.entry(cost.currency.clone()).or_insert(0_u64);
+            *total = total.saturating_add(cost.amount_micros);
+        }
+
+        Ok(ComplianceDashboard {
+            tenant_id: tenant,
+            total_agents: state.agent_ownerships.values().filter(|o| o.tenant_id == tenant).count(),
+            total_policies: state.assets.values().filter(|a| a.tenant_id == tenant && a.asset_type == AiAssetType::Policy).count(),
+            total_audit_events: 0, // Not tracked in-memory, would be from Platform audit
+            total_compliance_records: records.len(),
+            compliant_count: records.iter().filter(|r| r.status == ComplianceStatus::Compliant).count(),
+            non_compliant_count: records.iter().filter(|r| r.status == ComplianceStatus::NonCompliant).count(),
+            by_standard,
+            high_risk_agents: assessments.iter().filter(|a| a.risk_level >= RiskLevel::High).count(),
+            open_approval_requests: 0, // Not tracked in-memory, would be from ApprovalManager
+            cost_by_currency,
+            last_audit_at: None,
+        })
+    }
 
     async fn authorize(&self, tenant: Uuid, subject: &str, action: &str, resource: &str) -> EnterpriseResult<()> {
         let decision = self.platform.govern(GovernanceRequest::new(tenant, subject, action, resource, subject))

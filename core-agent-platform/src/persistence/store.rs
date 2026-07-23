@@ -1,7 +1,7 @@
 use super::schema::SCHEMA_SQL;
 use crate::domain::{
     validate_actor, ActionPolicy, AuditRecord, DataPolicy, Department, EnterpriseUser,
-    PlatformOrganization, PlatformPolicy, Quota, Team, Tenant,
+    ModelPolicy, PlatformOrganization, PlatformPolicy, Quota, Team, Tenant, ToolPolicy,
 };
 use crate::error::{PlatformError, PlatformResult};
 use crate::infrastructure::{GovernanceCommit, PlatformStore};
@@ -266,6 +266,18 @@ impl PlatformStore for SqlitePlatformStore {
     }
     async fn list_action_policies(&self, _t: Uuid) -> PlatformResult<Vec<ActionPolicy>> {
         Err(PlatformError::Internal("SQLite: list_action_policies not implemented".into()))
+    }
+    async fn save_tool_policy(&self, _v: &ToolPolicy, _e: Option<u64>, _a: &str) -> PlatformResult<()> {
+        Err(PlatformError::Internal("SQLite: save_tool_policy not implemented".into()))
+    }
+    async fn list_tool_policies(&self, _t: Uuid) -> PlatformResult<Vec<ToolPolicy>> {
+        Err(PlatformError::Internal("SQLite: list_tool_policies not implemented".into()))
+    }
+    async fn save_model_policy(&self, _v: &ModelPolicy, _e: Option<u64>, _a: &str) -> PlatformResult<()> {
+        Err(PlatformError::Internal("SQLite: save_model_policy not implemented".into()))
+    }
+    async fn list_model_policies(&self, _t: Uuid) -> PlatformResult<Vec<ModelPolicy>> {
+        Err(PlatformError::Internal("SQLite: list_model_policies not implemented".into()))
     }
 }
 fn write_tenant(tx: &Transaction<'_>, v: &Tenant, e: Option<u64>, a: &str) -> PlatformResult<()> {

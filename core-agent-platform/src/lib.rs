@@ -1,5 +1,3 @@
-//! Enterprise governance layer for all Agent business Runtimes.
-
 mod defaults;
 mod domain;
 mod error;

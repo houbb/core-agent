@@ -1,5 +1,39 @@
 # CHANGELOG
 
+## [0.44.2] - 2026-07-23
+
+### P9 Enterprise Agent Operating System — 企业 Agent 操作系统层
+
+实现 `design-docs/044-core-ablity-p9-agent-os.md` 定义的 P9 Enterprise Agent OS，在现有 governance + platform 基础上补齐企业级能力。
+
+#### core-agent-platform：新增策略类型
+
+- **ToolPolicy** — 工具级策略，按 tool_name/category 双层控制 allow/deny，支持 glob 模式匹配
+- **ModelPolicy** — 模型级策略，按 provider/model 双层控制，支持外部模型审批标记
+- **PlatformStore trait + InMemory/SQLite 实现** — 新增 `save_tool_policy` / `list_tool_policies` / `save_model_policy` / `list_model_policies`
+- **PlatformManager** — 新增 `create_tool_policy` / `create_model_policy` / `list_tool_policies` / `list_model_policies`
+
+#### core-agent-governance：新增所有权与合规仪表盘
+
+- **AgentOwnership** — Agent 所有权模型（owner/org/dept/team/authorized_users/authorized_roles/allow_self_serve），支持 `is_authorized()` 访问检查
+- **ComplianceDashboard** — 合规仪表盘聚合查询，包含 agent/policy/compliance/risk/cost 多维指标
+- **GovernanceSnapshot** — 扩展新增 `agent_ownerships` 计数
+- **RiskLevel** — 新增 `PartialOrd` 派生，支持 `>=` 比较
+
+#### 端到端测试
+
+- 新增 10 个 P9 E2E 测试，覆盖：
+  - Tenant → Organization → Department → Team → User 层级
+  - RBAC + Secret 生命周期
+  - Agent Identity + Resource Security
+  - DataPolicy + ActionPolicy 决策
+  - ToolPolicy + ModelPolicy 评估
+  - Agent Ownership 授权检查
+  - Compliance Dashboard 聚合
+  - Model Governance + Risk Assessment
+  - Evidence Chain + Compliance Record
+  - Full Enterprise Snapshot
+
 ## [0.44.1] - 2026-07-22
 
 ### P10 Agent Ecosystem Layer — Agent 生态平台层

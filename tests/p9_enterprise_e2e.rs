@@ -11,15 +11,15 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use core_agent_governance::{
-    AgentIdentityCredential, AgentRiskAssessment, ComplianceRecord, ComplianceStandard,
-    EnterpriseGovernanceManager, EnterprisePrincipal, EvidenceChain, GovernanceAsset,
-    IdentityProviderKind, ModelGovernanceRecord, Permission, ResourceProtection, RiskDimension,
-    RiskLevel, Role, RoleBinding, Secret,
+    AgentIdentityCredential, AgentOwnership, AgentRiskAssessment, ComplianceDashboard,
+    ComplianceRecord, ComplianceStandard, EnterpriseGovernanceManager, EnterprisePrincipal,
+    EvidenceChain, GovernanceAsset, IdentityProviderKind, ModelGovernanceRecord, Permission,
+    ResourceProtection, RiskDimension, RiskLevel, Role, RoleBinding, Secret,
 };
 use core_agent_platform::{
     ActionEnvironment, ActionPolicy, DataClassification, DataPolicy, Department, EnterpriseUser,
-    PlatformManager, PlatformOrganization, PolicyEffect, PolicyRule, Team, Tenant, TenantPlan,
-    TenantSettings,
+    ModelPolicy, PlatformManager, PlatformOrganization, PolicyEffect, PolicyRule, Team, Tenant,
+    TenantPlan, TenantSettings, ToolPolicy,
 };
 use uuid::Uuid;
 
@@ -455,4 +455,176 @@ fn p9_enterprise_snapshot_e2e() {
     assert_eq!(snap.secrets, 1);
     assert_eq!(snap.model_governance_records, 1);
     assert!(snap.principals > 0); // admin principal was created in setup
+}
+
+// ─── ToolPolicy + ModelPolicy E2E ─────────────────────────────────────────
+
+#[test]
+fn p9_tool_and_model_policy_e2e() {
+    let (platform, _governance, tenant_id, _org_id) = setup();
+
+    // 1. ToolPolicy
+    let tp = ToolPolicy::new(tenant_id, "shell-tools", "Shell Tools Policy", "admin");
+    let mut tp = tp;
+    tp.tool_pattern = "shell/*".into();
+    tp.allowed_tools.insert("shell/ls".into());
+    tp.denied_tools.insert("shell/rm".into());
+    tp.denied_tools.insert("shell/exec".into());
+
+    let tp = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(platform.create_tool_policy(tp))
+        .unwrap();
+
+    assert_eq!(
+        tp.evaluate("shell/ls", "shell"),
+        PolicyEffect::Allow
+    );
+    assert_eq!(
+        tp.evaluate("shell/rm", "shell"),
+        PolicyEffect::Deny
+    );
+    assert_eq!(
+        tp.evaluate("shell/exec", "shell"),
+        PolicyEffect::Deny
+    );
+    // Non-matching pattern = not restricted
+    assert_eq!(
+        tp.evaluate("git.commit", "git"),
+        PolicyEffect::Allow
+    );
+
+    // 2. ModelPolicy
+    let mp = ModelPolicy::new(tenant_id, "model-restrict", "Model Restriction", "admin");
+    let mut mp = mp;
+    mp.allowed_providers.insert("internal".into());
+    mp.denied_providers.insert("external".into());
+    mp.allowed_models.insert("internal/gpt-4".into());
+    mp.denied_models.insert("external/claude-5".into());
+
+    let mp = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(platform.create_model_policy(mp))
+        .unwrap();
+
+    assert_eq!(
+        mp.evaluate("internal", "internal/gpt-4"),
+        PolicyEffect::Allow
+    );
+    assert_eq!(
+        mp.evaluate("external", "external/claude-5"),
+        PolicyEffect::Deny
+    );
+    assert_eq!(
+        mp.evaluate("external", "external/gpt-5"),
+        PolicyEffect::Deny  // denied via provider
+    );
+    assert_eq!(
+        mp.evaluate("internal", "internal/llama-3"),
+        PolicyEffect::Allow  // allowed via provider
+    );
+
+    // List policies
+    let tps = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(platform.list_tool_policies(tenant_id))
+        .unwrap();
+    assert_eq!(tps.len(), 1);
+
+    let mps = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(platform.list_model_policies(tenant_id))
+        .unwrap();
+    assert_eq!(mps.len(), 1);
+}
+
+// ─── Agent Ownership E2E ──────────────────────────────────────────────────
+
+#[test]
+fn p9_agent_ownership_e2e() {
+    let (_platform, governance, tenant_id, _org_id) = setup();
+
+    let agent_id = Uuid::new_v4();
+
+    // Create principal first
+    let principal = EnterprisePrincipal::new(
+        tenant_id,
+        "owner",
+        IdentityProviderKind::LocalAdapter,
+        "Owner",
+        "admin",
+    );
+    let principal = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(governance.bind_principal(principal))
+        .unwrap();
+
+    // Register agent ownership
+    let ownership = AgentOwnership::new(tenant_id, agent_id, "rca-agent", "owner", principal.id);
+    let mut ownership = ownership;
+    ownership.allow_self_serve = true;
+    governance.register_agent_ownership(ownership).unwrap();
+
+    let list = governance.list_agent_ownerships(tenant_id).unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].agent_key, "rca-agent");
+
+    // Check access: owner should have access
+    let mut roles = BTreeSet::new();
+    let access = governance
+        .check_agent_access(tenant_id, agent_id, &principal.id, &roles)
+        .unwrap();
+    assert!(access);
+
+    // Check access: unauthorized user should not have access
+    let other_id = Uuid::new_v4();
+    let no_access = governance
+        .check_agent_access(tenant_id, agent_id, &other_id, &roles)
+        .unwrap();
+    assert!(!no_access);
+}
+
+// ─── Compliance Dashboard E2E ─────────────────────────────────────────────
+
+#[test]
+fn p9_compliance_dashboard_e2e() {
+    let (_platform, governance, tenant_id, _org_id) = setup();
+
+    // Seed compliance records
+    let mut record1 = ComplianceRecord::new(
+        tenant_id,
+        "agent",
+        "agent-1",
+        ComplianceStandard::Iso27001,
+        "admin",
+    );
+    record1.rule_name = "A.6.1.2".into();
+    record1.status = core_agent_governance::ComplianceStatus::Compliant;
+    governance.create_compliance_record(record1).unwrap();
+
+    let mut record2 = ComplianceRecord::new(
+        tenant_id,
+        "agent",
+        "agent-2",
+        ComplianceStandard::Soc2,
+        "admin",
+    );
+    record2.rule_name = "CC-1".into();
+    record2.status = core_agent_governance::ComplianceStatus::NonCompliant;
+    governance.create_compliance_record(record2).unwrap();
+
+    // Seed risk assessments
+    let mut assessment = AgentRiskAssessment::new(tenant_id, Uuid::new_v4(), "admin");
+    assessment.risk_score = 85;
+    assessment.risk_level = AgentRiskAssessment::compute_risk_level(85);
+    governance.assess_agent_risk(assessment).unwrap();
+
+    // Get dashboard
+    let dashboard = governance.compliance_dashboard(tenant_id).unwrap();
+    assert_eq!(dashboard.total_compliance_records, 2);
+    assert_eq!(dashboard.compliant_count, 1);
+    assert_eq!(dashboard.non_compliant_count, 1);
+    assert_eq!(dashboard.high_risk_agents, 1);
+    assert!(dashboard.by_standard.contains_key("Iso27001"));
+    assert!(dashboard.by_standard.contains_key("Soc2"));
 }

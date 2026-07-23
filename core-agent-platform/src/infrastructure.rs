@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::domain::{
-    ActionPolicy, AuditRecord, DataPolicy, Department, EnterpriseUser, GovernanceRequest, HealthStatus, MetricPoint, PlatformOrganization,
-    PlatformPolicy, Quota, Team, Tenant,
+    ActionPolicy, AuditRecord, DataPolicy, Department, EnterpriseUser, GovernanceRequest, HealthStatus, MetricPoint, ModelPolicy, PlatformOrganization,
+    PlatformPolicy, Quota, Team, Tenant, ToolPolicy,
 };
 use crate::error::PlatformResult;
 
@@ -133,6 +133,20 @@ pub trait PlatformStore: Send + Sync {
         actor: &str,
     ) -> PlatformResult<()>;
     async fn list_action_policies(&self, tenant_id: Uuid) -> PlatformResult<Vec<ActionPolicy>>;
+    async fn save_tool_policy(
+        &self,
+        value: &ToolPolicy,
+        expected: Option<u64>,
+        actor: &str,
+    ) -> PlatformResult<()>;
+    async fn list_tool_policies(&self, tenant_id: Uuid) -> PlatformResult<Vec<ToolPolicy>>;
+    async fn save_model_policy(
+        &self,
+        value: &ModelPolicy,
+        expected: Option<u64>,
+        actor: &str,
+    ) -> PlatformResult<()>;
+    async fn list_model_policies(&self, tenant_id: Uuid) -> PlatformResult<Vec<ModelPolicy>>;
 }
 
 pub trait PlatformPolicyEngine: Send + Sync {

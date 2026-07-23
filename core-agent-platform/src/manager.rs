@@ -4,8 +4,8 @@ use crate::defaults::{
 use crate::domain::{
     validate_actor, ActionPolicy, AuditDecision, AuditRecord, DataPolicy,
     Department, EnterpriseUser, GovernanceDecision, GovernanceRequest, HealthStatus, MetricPoint,
-    PlatformOrganization, PlatformPolicy, PlatformState, Quota, Team, Tenant,
-    TenantState,
+    ModelPolicy, PlatformOrganization, PlatformPolicy, PlatformState, Quota, Team, Tenant,
+    TenantState, ToolPolicy,
 };
 use crate::error::{PlatformError, PlatformResult};
 use crate::infrastructure::{
@@ -219,6 +219,20 @@ impl PlatformManager {
         self.store.save_action_policy(&v, None, &v.actor).await?;
         Ok(v)
     }
+    pub async fn create_tool_policy(&self, v: ToolPolicy) -> PlatformResult<ToolPolicy> {
+        self.require_running()?;
+        v.validate()?;
+        self.required_active_tenant(v.tenant_id).await?;
+        self.store.save_tool_policy(&v, None, &v.actor).await?;
+        Ok(v)
+    }
+    pub async fn create_model_policy(&self, v: ModelPolicy) -> PlatformResult<ModelPolicy> {
+        self.require_running()?;
+        v.validate()?;
+        self.required_active_tenant(v.tenant_id).await?;
+        self.store.save_model_policy(&v, None, &v.actor).await?;
+        Ok(v)
+    }
     pub async fn create_policy(&self, v: PlatformPolicy) -> PlatformResult<PlatformPolicy> {
         self.require_running()?;
         v.validate()?;
@@ -378,6 +392,12 @@ impl PlatformManager {
     }
     pub async fn list_action_policies(&self, t: Uuid) -> PlatformResult<Vec<ActionPolicy>> {
         self.store.list_action_policies(t).await
+    }
+    pub async fn list_tool_policies(&self, t: Uuid) -> PlatformResult<Vec<ToolPolicy>> {
+        self.store.list_tool_policies(t).await
+    }
+    pub async fn list_model_policies(&self, t: Uuid) -> PlatformResult<Vec<ModelPolicy>> {
+        self.store.list_model_policies(t).await
     }
     pub async fn list_policies(&self, t: Uuid) -> PlatformResult<Vec<PlatformPolicy>> {
         self.store.list_policies(t).await

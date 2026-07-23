@@ -3,8 +3,8 @@ use std::sync::{Mutex, RwLock};
 
 use crate::domain::{
     validate_actor, ActionPolicy, AuditRecord, DataPolicy, Department, EnterpriseUser,
-    GovernanceRequest, HealthStatus, MetricPoint, PlatformOrganization, PlatformPolicy, PolicyEffect,
-    Quota, Team, Tenant, TenantState,
+    GovernanceRequest, HealthStatus, MetricPoint, ModelPolicy, PlatformOrganization, PlatformPolicy, PolicyEffect,
+    Quota, Team, Tenant, TenantState, ToolPolicy,
 };
 use crate::error::{PlatformError, PlatformResult};
 use crate::infrastructure::{
@@ -102,6 +102,8 @@ struct State {
     users: HashMap<Uuid, EnterpriseUser>,
     data_policies: HashMap<Uuid, DataPolicy>,
     action_policies: HashMap<Uuid, ActionPolicy>,
+    tool_policies: HashMap<Uuid, ToolPolicy>,
+    model_policies: HashMap<Uuid, ModelPolicy>,
     policies: HashMap<Uuid, PlatformPolicy>,
     quotas: HashMap<Uuid, Quota>,
     audits: HashMap<Uuid, AuditRecord>,
@@ -463,6 +465,44 @@ impl PlatformStore for InMemoryPlatformStore {
         let s = self.read()?;
         active_owner(&s, t)?;
         let mut v = s.action_policies.values().filter(|x| x.tenant_id == t).cloned().collect::<Vec<_>>();
+        v.sort_by_key(|x| (x.key.clone(), x.id));
+        Ok(v)
+    }
+    async fn save_tool_policy(&self, v: &ToolPolicy, e: Option<u64>, actor: &str) -> PlatformResult<()> {
+        validate_actor(actor)?;
+        v.validate()?;
+        let mut s = self.write()?;
+        active_owner(&s, v.tenant_id)?;
+        version(s.tool_policies.get(&v.id).map(|x| x.version), e, v.version)?;
+        if s.tool_policies.values().any(|x| x.id != v.id && x.tenant_id == v.tenant_id && x.key == v.key) {
+            return Err(PlatformError::Conflict("ToolPolicy key exists".into()));
+        }
+        s.tool_policies.insert(v.id, v.clone());
+        Ok(())
+    }
+    async fn list_tool_policies(&self, t: Uuid) -> PlatformResult<Vec<ToolPolicy>> {
+        let s = self.read()?;
+        active_owner(&s, t)?;
+        let mut v = s.tool_policies.values().filter(|x| x.tenant_id == t).cloned().collect::<Vec<_>>();
+        v.sort_by_key(|x| (x.key.clone(), x.id));
+        Ok(v)
+    }
+    async fn save_model_policy(&self, v: &ModelPolicy, e: Option<u64>, actor: &str) -> PlatformResult<()> {
+        validate_actor(actor)?;
+        v.validate()?;
+        let mut s = self.write()?;
+        active_owner(&s, v.tenant_id)?;
+        version(s.model_policies.get(&v.id).map(|x| x.version), e, v.version)?;
+        if s.model_policies.values().any(|x| x.id != v.id && x.tenant_id == v.tenant_id && x.key == v.key) {
+            return Err(PlatformError::Conflict("ModelPolicy key exists".into()));
+        }
+        s.model_policies.insert(v.id, v.clone());
+        Ok(())
+    }
+    async fn list_model_policies(&self, t: Uuid) -> PlatformResult<Vec<ModelPolicy>> {
+        let s = self.read()?;
+        active_owner(&s, t)?;
+        let mut v = s.model_policies.values().filter(|x| x.tenant_id == t).cloned().collect::<Vec<_>>();
         v.sort_by_key(|x| (x.key.clone(), x.id));
         Ok(v)
     }
