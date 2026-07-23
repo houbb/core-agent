@@ -305,12 +305,15 @@ impl BuiltinToolProvider {
         ));
 
         tools.push(Self::tool(
-            "git.push", "Push commits to remote. (Default: Deny for safety)",
-            "git", PermissionDecision::Deny, 60_000,
+            "git.push", "Push commits to remote.",
+            "git", PermissionDecision::Ask, 60_000,
             file_schema(serde_json::json!({
                 "remote": {"type": "string", "description": "Remote name", "default": "origin"},
                 "branch": {"type": "string", "description": "Branch to push"},
-                "path": {"type": "string", "description": "Repository path"}
+                "force": {"type": "boolean", "description": "Force push with lease", "default": false},
+                "set_upstream": {"type": "boolean", "description": "Set upstream tracking", "default": true},
+                "path": {"type": "string", "description": "Repository path"},
+                "working_dir": {"type": "string", "description": "Working directory"}
             }), vec![]),
             git_push_tool(), &["git", "git.push"],
         ));
