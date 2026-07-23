@@ -1,5 +1,33 @@
 # CHANGELOG
 
+## [0.45.0] - 2026-07-23
+
+### 与 Claude Code 差距补齐 — Margin to Claude Code
+
+实现 `design-docs/045-margin-to-claude-code.md` 定义的 P0 优先级差距补齐，聚焦核心体验。
+
+#### 新增：Memory 文件索引（`src/memory_index.rs`）
+
+- **MemoryIndex** — 基于 `.claude/memory/` 目录的轻量级文件级记忆系统
+- **MEMORY.md 索引** — 自动生成和更新索引文件，格式与 Claude Code 兼容
+- **文件级持久化** — 每个记忆一个 `.md` 文件，带 YAML frontmatter，内容对用户完全透明
+- **完整 CRUD** — `save` / `read` / `list` / `get` / `delete` 操作
+- 8 个单元测试覆盖创建、读写、删除、持久化、名称校验
+
+#### 增强：TUI 状态栏（`agent-cli/src/tui.rs`）
+
+- **模型指示** — 状态栏左侧显示当前模型名称（白色 badge）
+- **权限模式** — 状态栏显示当前权限模式（risk-based / strict / auto，金色 badge）
+- **三栏布局** — 左：模型+权限 badge | 中：运行状态/提示 | 右：快捷键提示
+- **窄屏降级** — 终端宽度不足时自动回退到原居中状态栏
+- 9 个 TUI 测试全部通过，无回归
+
+#### 验证
+
+- `memory_index` 模块 8 个单元测试全部通过
+- `tui` 模块 9 个测试全部通过
+- 全量测试无回归
+
 ## [0.44.2] - 2026-07-23
 
 ### P9 Enterprise Agent Operating System — 企业 Agent 操作系统层

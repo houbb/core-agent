@@ -5,5 +5,5 @@ pub mod tools;
 
 pub use tools::{
     git_branch_tool, git_checkout_tool, git_commit_tool, git_diff_tool, git_log_tool,
-    git_status_tool,
+    git_push_tool, git_status_tool,
 };

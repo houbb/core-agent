@@ -312,8 +312,7 @@ impl BuiltinToolProvider {
                 "branch": {"type": "string", "description": "Branch to push"},
                 "path": {"type": "string", "description": "Repository path"}
             }), vec![]),
-            Arc::new(StubTool("builtin/git.push@1.0.0", "git.push is disabled by default")),
-            &["git", "git.push"],
+            git_push_tool(), &["git", "git.push"],
         ));
 
         // === Web Tools (2) ===

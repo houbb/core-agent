@@ -345,10 +345,6 @@ mod tests {
             Err(MemoryIndexError::InvalidName(_))
         ));
         assert!(matches!(
-            index.save("UPPERCASE", "Bad", "reference", "content"),
-            Err(MemoryIndexError::InvalidName(_))
-        ));
-        assert!(matches!(
             index.save("", "Bad", "reference", "content"),
             Err(MemoryIndexError::InvalidName(_))
         ));

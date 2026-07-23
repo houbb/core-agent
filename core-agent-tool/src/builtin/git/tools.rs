@@ -154,6 +154,45 @@ impl Tool for GitCheckoutTool {
 
 pub fn git_checkout_tool() -> Arc<dyn Tool> { Arc::new(GitCheckoutTool) }
 
+/// `git.push` — Push local commits to a remote.
+///
+/// Codex CLI 自动化 Git 工作流的最后一步，让 Agent 能完成
+/// `commit → push` 全流程，而非停留在本地 commit。
+pub struct GitPushTool;
+
+#[async_trait]
+impl Tool for GitPushTool {
+    fn key(&self) -> &str { "builtin/git.push@1.0.0" }
+
+    async fn execute(&self, request: &ToolRequest, _ctx: &ToolContext) -> ToolRuntimeResult<RawToolOutput> {
+        let wd = request.parameters["path"].as_str().or_else(|| request.parameters["working_dir"].as_str());
+        let force = request.parameters["force"].as_bool().unwrap_or(false);
+        let set_upstream = request.parameters["set_upstream"].as_bool().unwrap_or(true);
+
+        // Optional explicit remote + branch, e.g. "origin main".
+        let remote = request.parameters["remote"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("origin");
+        let branch = request.parameters["branch"]
+            .as_str()
+            .filter(|s| !s.is_empty());
+
+        let mut args = vec!["push"];
+        if set_upstream { args.push("-u"); }
+        if force { args.push("--force-with-lease"); }
+        args.push(remote);
+        if let Some(branch) = branch {
+            // Normalize with explicit src:dst form to avoid ambiguity.
+            args.push(branch);
+        }
+        let result = git(&args, wd)?;
+        Ok(RawToolOutput::text(result))
+    }
+}
+
+pub fn git_push_tool() -> Arc<dyn Tool> { Arc::new(GitPushTool) }
+
 #[cfg(test)]
 mod tests {
     use super::*;

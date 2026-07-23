@@ -19,6 +19,10 @@
 
 **core-agent** 是一个单进程、模块化的企业级 Agent Runtime。Session、Context、Model、Tool、Workspace、Planning、Execution、Memory 等全部 Runtime 模块由同一个 `EnterpriseAgent` 在进程内组合和管理，不需要逐个启动子服务。
 
+- **AGENTS.md 自动发现** — 项目根目录自动发现 `AGENTS.override.md` / `AGENTS.md` 作为项目级指令
+- **Memory 文件索引** — `.claude/memory/` 目录下的 `MEMORY.md` 索引，文件级透明记忆
+- **TUI 状态栏** — 终端底部显示当前模型、权限模式、运行状态
+
 用户只需选择 **Terminal** 或 **Desktop** 两种接入方式，底层共享同一套能力。
 
 ```text
