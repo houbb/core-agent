@@ -9,9 +9,13 @@
 mod domain;
 mod error;
 mod manager;
+mod package;
 
 pub use domain::*;
 pub use error::{PluginError, PluginResult};
 pub use manager::{PluginManager, PluginManagerBuilder};
+pub use package::{
+    AgentDefinition, PluginPackage, PluginPackageBuilder, PluginPackageReader,
+};
 
 pub type PluginRuntime = PluginManager;

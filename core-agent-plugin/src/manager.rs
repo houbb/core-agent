@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -11,6 +12,7 @@ use core_agent_extension::{
 
 use crate::domain::{Plugin, PluginManifest, PluginState};
 use crate::error::{PluginError, PluginResult};
+use crate::package::{PluginPackage, PluginPackageReader};
 
 pub struct PluginManagerBuilder {
     extension_manager: Option<Arc<ExtensionManager>>,
@@ -66,6 +68,47 @@ impl PluginManager {
             manifest: extension_manifest,
             source_uri: format!("file://plugin/{}", manifest.name),
             checksum: "0".repeat(64),
+            actor: actor.into(),
+        };
+        self.extension_manager
+            .install(request)
+            .await
+            .map_err(|e| PluginError::Extension(e.to_string()))?;
+
+        let mut plugins = self
+            .plugins
+            .write()
+            .map_err(|_| PluginError::Conflict("plugin lock poisoned".into()))?;
+        if plugins.values().any(|p| p.name == plugin.name) {
+            return Err(PluginError::Conflict(format!(
+                "plugin {} is already installed",
+                plugin.name
+            )));
+        }
+        let id = plugin.id;
+        plugins.insert(id, plugin.clone());
+        Ok(plugin)
+    }
+
+    /// Install a plugin from a packaged .zip file.
+    pub async fn install_from_package(&self, path: &Path, actor: &str) -> PluginResult<Plugin> {
+        let package = PluginPackageReader::from_zip(path)?;
+        let manifest = package.manifest.clone();
+        let checksum = package.checksum_sha256.clone();
+
+        let plugin = Plugin::install(
+            manifest.clone(),
+            path.display().to_string(),
+            &checksum,
+            actor,
+        )?;
+
+        // Register as an extension in the extension runtime
+        let extension_manifest = self.plugin_to_extension(&manifest)?;
+        let request = InstallExtensionRequest {
+            manifest: extension_manifest,
+            source_uri: format!("file://{}", path.display()),
+            checksum,
             actor: actor.into(),
         };
         self.extension_manager

@@ -18,6 +18,10 @@ pub enum PluginError {
     Yaml(#[from] serde_yaml::Error),
     #[error("extension runtime error: {0}")]
     Extension(String),
+    #[error("plugin package error: {0}")]
+    Package(String),
+    #[error("plugin exceeds limit {kind}: {limit}")]
+    LimitExceeded { kind: String, limit: usize },
 }
 
 pub type PluginResult<T> = Result<T, PluginError>;

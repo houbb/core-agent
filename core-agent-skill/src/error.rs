@@ -20,6 +20,10 @@ pub enum SkillError {
     InvalidUtf8(String),
     #[error("skill validation error: {0}")]
     Validation(String),
+    #[error("tool not found in skill: {0}")]
+    ToolNotFound(String),
+    #[error("skill resolution failed: {0}")]
+    ResolutionFailed(String),
     #[error("skill serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
     #[error("skill YAML error: {0}")]
