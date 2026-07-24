@@ -1,5 +1,5 @@
 //! Builtin tool implementations — file, shell, git, web, ask, todo, agent, plan, cron, lsp,
-//! ast, code_index, dependency, decompiler, project, runtime, enterprise, ai.
+//! ast, code_index, dependency, decompiler, project, runtime, enterprise, ai, user.
 //!
 //! Every tool is a `FunctionTool` registered via `BuiltinToolProvider`.
 //! No modifications to the core `ToolManager` or `ToolRegistry` are needed.
@@ -23,5 +23,6 @@ pub mod project;
 pub mod runtime;
 pub mod enterprise;
 pub mod ai;
+pub mod user;
 
 pub use provider::BuiltinToolProvider;

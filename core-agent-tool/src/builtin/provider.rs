@@ -27,6 +27,7 @@ use super::project::*;
 use super::runtime::*;
 use super::enterprise::*;
 use super::ai::*;
+use super::user::*;
 
 /// Provider that registers all 41 builtin tools.
 pub struct BuiltinToolProvider {

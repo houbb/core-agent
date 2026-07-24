@@ -51,6 +51,7 @@ members = [
 		    "core-agent-sdk",
 		    "core-agent-openapi",
 		    "core-agent-developer",
+    "core-agent-scanner",
 ]
 
 [workspace.package]
