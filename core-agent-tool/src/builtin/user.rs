@@ -82,8 +82,10 @@ impl UserToolProvider {
         tool_name: &str,
         manifest_path: &Path,
     ) -> ToolRuntimeResult<ToolRegistration> {
-        let content = std::fs::read_to_string(manifest_path)?;
-        let manifest: UserToolManifest = serde_yaml::from_str(&content)?;
+        let content = std::fs::read_to_string(manifest_path)
+            .map_err(|e| ToolError::InvalidArgument(format!("failed to read manifest: {e}")))?;
+        let manifest: UserToolManifest = serde_yaml::from_str(&content)
+            .map_err(|e| ToolError::InvalidArgument(format!("invalid YAML manifest: {e}")))?;
         manifest.validate()?;
 
         let key = format!("{}/{}@{}", provider.key, manifest.name, manifest.version);
@@ -141,7 +143,7 @@ impl Tool for CommandTool {
     ) -> ToolRuntimeResult<crate::domain::RawToolOutput> {
         // Serialize the parameters as JSON and pass via stdin.
         let input = serde_json::to_string(&request.parameters)
-            .map_err(|e| ToolError::execution("user", e, false))?;
+            .map_err(|e| ToolError::execution("user", e.to_string(), false))?;
 
         let mut cmd = tokio::process::Command::new(&self.command);
         cmd.args(&self.args)
